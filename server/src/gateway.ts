@@ -1,11 +1,31 @@
 import { WebSocketServer, WebSocket } from "ws";
 import type { IncomingMessage, Server } from "http";
 import type { Database } from "better-sqlite3";
-import { IngestMessageSchema, TelemetryPacketSchema } from "@hit-tracker/shared";
+import {
+  FloorEstimator,
+  IngestMessageSchema,
+  type TelemetryPacket,
+} from "@hit-tracker/shared";
 import { verifyToken } from "./auth.js";
 
 /** Dashboard client set – receives broadcast updates */
 const dashboardClients = new Set<WebSocket>();
+
+/** Per-soldier barometric floor estimators with Kalman filtering and hysteresis */
+const soldierEstimators = new Map<string, FloorEstimator>();
+
+function getEstimatorForSoldier(soldierId: string): FloorEstimator {
+  let estimator = soldierEstimators.get(soldierId);
+  if (!estimator) {
+    estimator = new FloorEstimator({
+      floorHeightM: 3.5,
+      thresholdBandM: 0.4,
+      minDwellTimeMs: 2000,
+    });
+    soldierEstimators.set(soldierId, estimator);
+  }
+  return estimator;
+}
 
 export function createWebSocketGateway(httpServer: Server, db: Database) {
   // ── Ingest gateway (devices / simulator → server) ─────────────────────────
@@ -61,8 +81,31 @@ export function createWebSocketGateway(httpServer: Server, db: Database) {
       if (!parsed.success) return;
 
       const pkt = parsed.data.payload;
+      const estimator = getEstimatorForSoldier(pkt.soldierId);
+      const estimation = estimator.update(pkt.pressureHpa, pkt.timestamp);
+
+      // Attach estimated floor label to packet
+      pkt.estimatedFloor = estimation.floor;
+
       storeTelemetry(db, pkt);
+
+      // Broadcast telemetry to dashboard clients
       broadcastToDashboard({ type: "telemetry", payload: pkt });
+
+      // Broadcast soldier state update with estimated floor
+      broadcastToDashboard({
+        type: "soldier_update",
+        payload: {
+          id: pkt.soldierId,
+          name: pkt.soldierId,
+          teamId: pkt.teamId,
+          floor: estimation.floorNumber,
+          floorLabel: estimation.floor,
+          lastPacket: pkt,
+          lastSeenAt: Date.now(),
+          status: "active",
+        },
+      });
     });
 
     ws.on("close", () => console.log("[gateway] Simulator/device disconnected"));
@@ -97,11 +140,11 @@ export function createWebSocketGateway(httpServer: Server, db: Database) {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function storeTelemetry(db: Database, pkt: ReturnType<typeof TelemetryPacketSchema.parse>) {
+function storeTelemetry(db: Database, pkt: TelemetryPacket) {
   db.prepare(`
     INSERT INTO telemetry
-      (soldier_id, team_id, seq, ts, x, y, pressure_hpa, battery_pct, signal)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (soldier_id, team_id, seq, ts, x, y, pressure_hpa, battery_pct, signal, floor)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     pkt.soldierId,
     pkt.teamId,
@@ -111,7 +154,8 @@ function storeTelemetry(db: Database, pkt: ReturnType<typeof TelemetryPacketSche
     pkt.y,
     pkt.pressureHpa,
     pkt.batteryPct,
-    pkt.signal
+    pkt.signal,
+    pkt.estimatedFloor ?? null
   );
 }
 

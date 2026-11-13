@@ -36,6 +36,7 @@ export function createDatabase(): Database {
       pressure_hpa REAL NOT NULL,
       battery_pct  INTEGER NOT NULL,
       signal       INTEGER NOT NULL,
+      floor        TEXT,
       received_at  INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
     );
 
@@ -54,6 +55,12 @@ export function createDatabase(): Database {
       acknowledged_at INTEGER
     );
   `);
+
+  try {
+    db.exec("ALTER TABLE telemetry ADD COLUMN floor TEXT");
+  } catch {
+    // Column already exists or table was just created with the column
+  }
 
   return db;
 }

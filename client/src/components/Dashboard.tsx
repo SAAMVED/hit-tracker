@@ -51,7 +51,7 @@ export default function Dashboard({ auth, onLogout }: Props) {
         {/* Left: Floor Selector */}
         <aside className="w-16 bg-nsg-surface border-r border-nsg-border flex flex-col items-center py-4 gap-2 flex-shrink-0">
           <FloorSelector
-            floors={[3, 2, 1, 0, -1]}
+            floors={[5, 4, 3, 2, 1, 0, -1, -2]}
             activeFloor={activeFloor}
             onSelect={setActiveFloor}
           />

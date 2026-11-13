@@ -1,5 +1,10 @@
 import { z } from "zod";
 
+// ─── Floor Labels ─────────────────────────────────────────────────────────────
+
+export const FloorLabelSchema = z.enum(["B2", "B1", "G", "1", "2", "3", "4", "5"]);
+export type FloorLabel = z.infer<typeof FloorLabelSchema>;
+
 // ─── Telemetry Packet ────────────────────────────────────────────────────────
 
 /**
@@ -25,6 +30,8 @@ export const TelemetryPacketSchema = z.object({
   batteryPct: z.number().int().min(0).max(100),
   /** Signal strength in dBm (negative) */
   signal: z.number().min(-130).max(0),
+  /** Estimated floor label assigned by server / barometric estimation */
+  estimatedFloor: FloorLabelSchema.optional(),
 });
 
 export type TelemetryPacket = z.infer<typeof TelemetryPacketSchema>;
@@ -42,6 +49,8 @@ export const SoldierSchema = z.object({
   status: SoldierStatusSchema.default("unknown"),
   /** Estimated floor number (0 = ground, negative = basement) */
   floor: z.number().int().default(0),
+  /** Estimated floor label ("B2", "B1", "G", "1".."5") */
+  floorLabel: FloorLabelSchema.optional(),
   /** Latest telemetry packet received */
   lastPacket: TelemetryPacketSchema.optional(),
   /** Server-side timestamp of last packet (ms since epoch) */
@@ -146,5 +155,5 @@ export const SEA_LEVEL_HPA = 1013.25;
 /** Metres per hPa (approximate at standard atmosphere, low altitude) */
 export const METRES_PER_HPA = 8.3;
 
-/** Height of one building floor in metres */
-export const FLOOR_HEIGHT_M = 3.0;
+/** Height of one building floor in metres (configurable, default: 3.5 m) */
+export const FLOOR_HEIGHT_M = 3.5;

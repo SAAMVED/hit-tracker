@@ -3,6 +3,8 @@ node_modules/
 dist/
 *.js.map
 server/db/
+db/
+*.sqlite*
 server/uploads/
 client/dist/
 *.tsbuildinfo
