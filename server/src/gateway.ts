@@ -2,8 +2,10 @@ import { WebSocketServer, WebSocket } from "ws";
 import type { IncomingMessage, Server } from "http";
 import type { Database } from "better-sqlite3";
 import {
+  AlertsEngine,
   FloorEstimator,
   IngestMessageSchema,
+  type FloorLabel,
   type TelemetryPacket,
 } from "@hit-tracker/shared";
 import { verifyToken } from "./auth.js";
@@ -14,10 +16,33 @@ const dashboardClients = new Set<WebSocket>();
 /** Per-soldier barometric floor estimators with Kalman filtering and hysteresis */
 const soldierEstimators = new Map<string, FloorEstimator>();
 
-function getEstimatorForSoldier(soldierId: string): FloorEstimator {
+/** Centralized alerts engine */
+const alertsEngine = new AlertsEngine();
+
+/** Cache of the latest live state for each soldier to serve snapshots */
+export interface SoldierLiveSnapshot {
+  soldierId: string;
+  teamId: string;
+  x: number;
+  y: number;
+  altitude: number;
+  estimatedFloor: FloorLabel;
+  batteryPct: number;
+  timestamp: number;
+  signal?: number;
+  seq?: number;
+}
+const latestSoldierStates = new Map<string, SoldierLiveSnapshot>();
+
+/**
+ * Retrieves or initializes a FloorEstimator for a soldier.
+ * P0 reference pressure is taken from that soldier's very first reading.
+ */
+function getOrCreateEstimator(soldierId: string, initialPressureHpa: number): FloorEstimator {
   let estimator = soldierEstimators.get(soldierId);
   if (!estimator) {
     estimator = new FloorEstimator({
+      p0Hpa: initialPressureHpa, // Requirement: P0 taken from that soldier's first reading
       floorHeightM: 3.5,
       thresholdBandM: 0.4,
       minDwellTimeMs: 2000,
@@ -65,9 +90,30 @@ export function createWebSocketGateway(httpServer: Server, db: Database) {
     }
   });
 
+  // ── Throughput Tracker ────────────────────────────────────────────────────
+  let packetsProcessedThisSec = 0;
+
+  // Log once per second throughput and connected dashboard clients
+  setInterval(() => {
+    console.log(
+      `[gateway] Processed ${packetsProcessedThisSec} packets/s | Dashboard clients: ${dashboardClients.size}`
+    );
+    packetsProcessedThisSec = 0;
+
+    // Scan for stale soldiers (> 10s without packets -> SIGNAL LOST)
+    const now = Date.now();
+    const staleAlerts = alertsEngine.checkStaleSoldiers(now);
+    for (const alert of staleAlerts) {
+      broadcastToDashboard({
+        type: "alert",
+        payload: alert,
+      });
+    }
+  }, 1000);
+
   // ── Ingest connection handler ──────────────────────────────────────────────
   ingestWss.on("connection", (ws: WebSocket) => {
-    console.log("[gateway] Simulator/device connected");
+    console.log("[gateway] Simulator/device connected to /ws/ingest");
 
     ws.on("message", (data) => {
       let raw: unknown;
@@ -77,52 +123,99 @@ export function createWebSocketGateway(httpServer: Server, db: Database) {
         return;
       }
 
+      // 1. Validate with the shared Zod schema
       const parsed = IngestMessageSchema.safeParse(raw);
       if (!parsed.success) return;
 
+      packetsProcessedThisSec++;
       const pkt = parsed.data.payload;
-      const estimator = getEstimatorForSoldier(pkt.soldierId);
+
+      // 1. Run barometric floor estimation per soldier (P0 from first reading)
+      const estimator = getOrCreateEstimator(pkt.soldierId, pkt.pressureHpa);
       const estimation = estimator.update(pkt.pressureHpa, pkt.timestamp);
 
-      // Attach estimated floor label to packet
-      pkt.estimatedFloor = estimation.floor;
+      // Construct live soldier state
+      const soldierState: SoldierLiveSnapshot = {
+        soldierId: pkt.soldierId,
+        teamId: pkt.teamId,
+        x: pkt.x,
+        y: pkt.y,
+        altitude: Math.round(estimation.smoothedAltitude * 100) / 100,
+        estimatedFloor: estimation.floor,
+        batteryPct: pkt.batteryPct,
+        timestamp: pkt.timestamp,
+        signal: pkt.signal,
+        seq: pkt.seq,
+      };
+      latestSoldierStates.set(pkt.soldierId, soldierState);
 
+      // Store in SQLite
+      pkt.estimatedFloor = estimation.floor;
+      pkt.altitude = soldierState.altitude;
       storeTelemetry(db, pkt);
 
-      // Broadcast telemetry to dashboard clients
-      broadcastToDashboard({ type: "telemetry", payload: pkt });
+      // 2. Broadcast resulting soldier state as {"type":"telemetry", ...}
+      // Provide both wrapped and top-level properties for versatile client consumption
+      const telemetryMessage = {
+        type: "telemetry",
+        payload: soldierState,
+        ...soldierState,
+      };
+      broadcastToDashboard(telemetryMessage);
 
-      // Broadcast soldier state update with estimated floor
-      broadcastToDashboard({
-        type: "soldier_update",
-        payload: {
-          id: pkt.soldierId,
-          name: pkt.soldierId,
+      // Run alerts check (floor transition, low battery)
+      const alerts = alertsEngine.processTelemetry(
+        {
+          soldierId: pkt.soldierId,
           teamId: pkt.teamId,
-          floor: estimation.floorNumber,
-          floorLabel: estimation.floor,
-          lastPacket: pkt,
-          lastSeenAt: Date.now(),
-          status: "active",
+          batteryPct: pkt.batteryPct,
+          lastSeenAt: pkt.timestamp,
+          floor: estimation.floor,
         },
-      });
+        pkt.timestamp
+      );
+      for (const alert of alerts) {
+        broadcastToDashboard({
+          type: "alert",
+          payload: alert,
+        });
+      }
     });
 
-    ws.on("close", () => console.log("[gateway] Simulator/device disconnected"));
+    ws.on("close", () => console.log("[gateway] Simulator/device disconnected from /ws/ingest"));
     ws.on("error", (e) => console.error("[gateway] Ingest error", e));
   });
 
   // ── Dashboard connection handler ───────────────────────────────────────────
   dashboardWss.on("connection", (ws: WebSocket) => {
-    console.log("[gateway] Dashboard client connected");
+    console.log(`[gateway] Dashboard client connected (${dashboardClients.size + 1} active)`);
     dashboardClients.add(ws);
 
-    // Send a ping immediately so the client knows it's alive
-    safeSend(ws, { type: "ping", payload: { serverTime: Date.now() } });
+    // Send {"type":"connected"} immediately upon connection
+    safeSend(ws, {
+      type: "connected",
+      serverTime: Date.now(),
+    });
+
+    // 3. Send a {"type":"snapshot"} with all known soldiers when a dashboard client connects
+    const allSoldiers = Array.from(latestSoldierStates.values());
+    safeSend(ws, {
+      type: "snapshot",
+      payload: allSoldiers,
+      soldiers: allSoldiers,
+    });
+
+    // Also send currently active alerts to the new dashboard
+    for (const alert of alertsEngine.getActiveAlerts()) {
+      safeSend(ws, {
+        type: "alert",
+        payload: alert,
+      });
+    }
 
     ws.on("close", () => {
       dashboardClients.delete(ws);
-      console.log("[gateway] Dashboard client disconnected");
+      console.log(`[gateway] Dashboard client disconnected (${dashboardClients.size} active)`);
     });
     ws.on("error", (e) => {
       console.error("[gateway] Dashboard error", e);
@@ -141,22 +234,26 @@ export function createWebSocketGateway(httpServer: Server, db: Database) {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function storeTelemetry(db: Database, pkt: TelemetryPacket) {
-  db.prepare(`
-    INSERT INTO telemetry
-      (soldier_id, team_id, seq, ts, x, y, pressure_hpa, battery_pct, signal, floor)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    pkt.soldierId,
-    pkt.teamId,
-    pkt.seq,
-    pkt.timestamp,
-    pkt.x,
-    pkt.y,
-    pkt.pressureHpa,
-    pkt.batteryPct,
-    pkt.signal,
-    pkt.estimatedFloor ?? null
-  );
+  try {
+    db.prepare(`
+      INSERT INTO telemetry
+        (soldier_id, team_id, seq, ts, x, y, pressure_hpa, battery_pct, signal, floor)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      pkt.soldierId,
+      pkt.teamId,
+      pkt.seq,
+      pkt.timestamp,
+      pkt.x,
+      pkt.y,
+      pkt.pressureHpa,
+      pkt.batteryPct,
+      pkt.signal,
+      pkt.estimatedFloor ?? null
+    );
+  } catch (err) {
+    console.error("[gateway] SQLite insert error:", err);
+  }
 }
 
 function broadcastToDashboard(msg: object) {

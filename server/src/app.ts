@@ -1,12 +1,19 @@
 import express, { Request, Response, NextFunction } from "express";
+import path from "path";
+import { fileURLToPath } from "url";
 import { loginHandler } from "./auth.js";
 import type { Database } from "better-sqlite3";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export function createApp(db: Database) {
   const app = express();
 
   // ── Middleware ───────────────────────────────────────────────────────────────
   app.use(express.json());
+
+  // Static samples (e.g. procedural GLB model)
+  app.use("/samples", express.static(path.resolve(__dirname, "../samples")));
 
   // Basic CORS for local dev (client on :5173, server on :3000)
   app.use((_req: Request, res: Response, next: NextFunction) => {

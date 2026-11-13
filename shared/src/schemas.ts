@@ -32,6 +32,8 @@ export const TelemetryPacketSchema = z.object({
   signal: z.number().min(-130).max(0),
   /** Estimated floor label assigned by server / barometric estimation */
   estimatedFloor: FloorLabelSchema.optional(),
+  /** Estimated relative altitude in metres */
+  altitude: z.number().finite().optional(),
 });
 
 export type TelemetryPacket = z.infer<typeof TelemetryPacketSchema>;
@@ -84,6 +86,7 @@ export type AlertSeverity = z.infer<typeof AlertSeveritySchema>;
 export const AlertTypeSchema = z.enum([
   "battery_low",
   "signal_lost",
+  "floor_transition",
   "man_down",
   "out_of_bounds",
   "custom",
@@ -105,6 +108,22 @@ export const AlertSchema = z.object({
 
 export type Alert = z.infer<typeof AlertSchema>;
 
+// ─── Soldier Live State (Broadcast format) ───────────────────────────────────
+
+export const SoldierLiveStateSchema = z.object({
+  soldierId: z.string().min(1).max(16),
+  teamId: z.string().min(1).max(32),
+  x: z.number().finite(),
+  y: z.number().finite(),
+  altitude: z.number().finite().default(0),
+  estimatedFloor: FloorLabelSchema,
+  batteryPct: z.number().int().min(0).max(100),
+  timestamp: z.number().int().positive(),
+  seq: z.number().int().nonnegative().optional(),
+  signal: z.number().optional(),
+});
+export type SoldierLiveState = z.infer<typeof SoldierLiveStateSchema>;
+
 // ─── WebSocket Messages ───────────────────────────────────────────────────────
 
 /** Message sent from simulator / device → server */
@@ -116,7 +135,28 @@ export type IngestMessage = z.infer<typeof IngestMessageSchema>;
 
 /** Message sent from server → dashboard clients */
 export const DashboardMessageSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("telemetry"), payload: TelemetryPacketSchema }),
+  z.object({
+    type: z.literal("connected"),
+    serverTime: z.number().optional(),
+    payload: z.object({ serverTime: z.number() }).optional(),
+  }),
+  z.object({
+    type: z.literal("telemetry"),
+    payload: z.union([SoldierLiveStateSchema, TelemetryPacketSchema]),
+    soldierId: z.string().optional(),
+    teamId: z.string().optional(),
+    x: z.number().optional(),
+    y: z.number().optional(),
+    altitude: z.number().optional(),
+    estimatedFloor: FloorLabelSchema.optional(),
+    batteryPct: z.number().optional(),
+    timestamp: z.number().optional(),
+  }),
+  z.object({
+    type: z.literal("snapshot"),
+    payload: z.array(SoldierLiveStateSchema),
+    soldiers: z.array(SoldierLiveStateSchema).optional(),
+  }),
   z.object({ type: z.literal("alert"), payload: AlertSchema }),
   z.object({
     type: z.literal("soldier_update"),

@@ -11,6 +11,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@gltf-transform/core": "^4.5.1",
     "@hit-tracker/shared": "*",
     "bcryptjs": "^2.4.3",
     "better-sqlite3": "^11.5.0",

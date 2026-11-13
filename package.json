@@ -14,12 +14,13 @@
     "typecheck": "npm run typecheck --workspaces --if-present",
     "start": "concurrently -k -n server,client,simulator -c green,cyan,yellow \"npm run dev --workspace=server\" \"npm run dev --workspace=client\" \"wait-on http://localhost:3000/api/health && npm run dev --workspace=simulator\"",
     "start:prod": "npm run build && NODE_ENV=production npm run start --workspace=server",
-    "generate:models": "echo 'Model generation placeholder – implement in a future task'"
+    "generate:models": "npx tsx server/generate-sample-building/index.ts"
   },
   "devDependencies": {
     "concurrently": "^9.1.0",
-    "wait-on": "^8.0.1",
-    "typescript": "^5.6.3"
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3",
+    "wait-on": "^8.0.1"
   },
   "engines": {
     "node": ">=20.0.0"

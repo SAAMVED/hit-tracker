@@ -37,7 +37,9 @@ function connect() {
       if (!ws || ws.readyState !== WebSocket.OPEN) return;
       for (const state of states) {
         const packet = tick(state);
-        ws.send(JSON.stringify({ type: "telemetry", payload: packet }));
+        if (packet) {
+          ws.send(JSON.stringify({ type: "telemetry", payload: packet }));
+        }
       }
     }, TICK_MS);
   });
