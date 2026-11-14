@@ -1,3 +1,5 @@
+import { detectManDown } from "./mandown.js";
+
 /** Threshold in milliseconds before a soldier is marked as having lost signal (10 seconds) */
 export const SIGNAL_LOST_TIMEOUT_MS = 10_000;
 
@@ -95,13 +97,40 @@ export function checkFloorTransition(soldier, previousFloor, nowMs = Date.now())
 }
 
 /**
+ * Check if a soldier is in a man-down state based on movement history.
+ *
+ * @param {object} soldier Soldier state to evaluate
+ * @param {Array<object>} history Movement history of packets
+ * @param {number} [nowMs=Date.now()] Current time in ms
+ * @param {object} [options={}] Tuning options
+ */
+export function checkManDown(soldier, history, nowMs = Date.now(), options = {}) {
+  if (!history || history.length === 0) return null;
+  const result = detectManDown(history, nowMs, options);
+  if (result.isManDown) {
+    return {
+      id: generateAlertId(),
+      type: "man_down",
+      severity: "critical",
+      soldierId: soldier.soldierId,
+      teamId: soldier.teamId,
+      message: `[${soldier.soldierId}] CRITICAL: MAN DOWN — No motion detected for 20s`,
+      timestamp: nowMs,
+      acknowledged: false,
+    };
+  }
+  return null;
+}
+
+/**
  * Evaluates all conditions for a soldier upon receiving an update.
  *
  * @param current Current soldier state
  * @param previousFloor Previous floor label (or null if initial)
  * @param nowMs Current time in ms
+ * @param history Optional movement history for man-down evaluation
  */
-export function evaluateSoldierAlerts(current, previousFloor, nowMs = Date.now()) {
+export function evaluateSoldierAlerts(current, previousFloor, nowMs = Date.now(), history = null) {
   const alerts = [];
 
   const floorAlert = checkFloorTransition(current, previousFloor, nowMs);
@@ -109,6 +138,11 @@ export function evaluateSoldierAlerts(current, previousFloor, nowMs = Date.now()
 
   const batteryAlert = checkLowBattery(current, LOW_BATTERY_THRESHOLD_PCT, nowMs);
   if (batteryAlert) alerts.push(batteryAlert);
+
+  if (history) {
+    const manDownAlert = checkManDown(current, history, nowMs);
+    if (manDownAlert) alerts.push(manDownAlert);
+  }
 
   return alerts;
 }
@@ -121,6 +155,7 @@ export class AlertsEngine {
   #activeAlerts = new Map();
   #previousFloors = new Map();
   #knownSoldiers = new Map();
+  #soldierHistories = new Map();
 
   /**
    * Process incoming soldier update.
@@ -129,6 +164,27 @@ export class AlertsEngine {
     const prevFloor = this.#previousFloors.get(soldier.soldierId);
     this.#knownSoldiers.set(soldier.soldierId, soldier);
     this.#previousFloors.set(soldier.soldierId, soldier.floor);
+
+    // Track movement history for man-down detection
+    let history = this.#soldierHistories.get(soldier.soldierId);
+    if (!history) {
+      history = [];
+      this.#soldierHistories.set(soldier.soldierId, history);
+    }
+    history.push({
+      soldierId: soldier.soldierId,
+      teamId: soldier.teamId,
+      x: soldier.x ?? 0,
+      y: soldier.y ?? 0,
+      altitude: soldier.altitude ?? 0,
+      accelMagnitude: soldier.accelMagnitude ?? 1.0,
+      timestamp: soldier.lastSeenAt ?? nowMs,
+    });
+    // Keep 40s of history
+    const historyCutoff = nowMs - 40_000;
+    while (history.length > 0 && history[0].timestamp < historyCutoff) {
+      history.shift();
+    }
 
     const newAlerts = [];
 
@@ -159,6 +215,32 @@ export class AlertsEngine {
     } else {
       // Cleared / recharged
       this.#activeAlerts.delete(batteryKey);
+    }
+
+    // 3. Man Down check
+    const manDownKey = `${soldier.soldierId}:man_down`;
+    const manDownCheck = detectManDown(history, nowMs);
+    if (manDownCheck.isManDown) {
+      if (!this.#activeAlerts.has(manDownKey)) {
+        const alert = {
+          id: generateAlertId(),
+          type: "man_down",
+          severity: "critical",
+          soldierId: soldier.soldierId,
+          teamId: soldier.teamId,
+          message: `[${soldier.soldierId}] CRITICAL: MAN DOWN — No motion detected for 20s`,
+          timestamp: nowMs,
+          acknowledged: false,
+        };
+        this.#activeAlerts.set(manDownKey, alert);
+        newAlerts.push(alert);
+      }
+    } else if (
+      manDownCheck.reason === "POSITION_DELTA_EXCEEDED" ||
+      manDownCheck.reason === "ACCEL_VARIANCE_TOO_HIGH"
+    ) {
+      // Resumed motion clears man down
+      this.#activeAlerts.delete(manDownKey);
     }
 
     return newAlerts;

@@ -54,12 +54,82 @@ export function createDatabase() {
       acknowledged_by TEXT,
       acknowledged_at INTEGER
     );
+
+    CREATE TABLE IF NOT EXISTS calibration (
+      id            TEXT PRIMARY KEY,
+      translation_x REAL NOT NULL DEFAULT 0,
+      translation_y REAL NOT NULL DEFAULT 0,
+      translation_z REAL NOT NULL DEFAULT 0,
+      rotation_x    REAL NOT NULL DEFAULT 0,
+      rotation_y    REAL NOT NULL DEFAULT 0,
+      rotation_z    REAL NOT NULL DEFAULT 0,
+      scale_x       REAL NOT NULL DEFAULT 1,
+      scale_y       REAL NOT NULL DEFAULT 1,
+      scale_z       REAL NOT NULL DEFAULT 1,
+      updated_at    INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+    );
+
+    CREATE TABLE IF NOT EXISTS missions (
+      id         TEXT PRIMARY KEY,
+      name       TEXT NOT NULL,
+      started_at INTEGER NOT NULL,
+      ended_at   INTEGER,
+      status     TEXT NOT NULL CHECK(status IN ('active', 'completed')),
+      created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+    );
+
+    CREATE TABLE IF NOT EXISTS rejected_packets (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      soldier_id  TEXT NOT NULL,
+      reason      TEXT NOT NULL,
+      raw_payload TEXT NOT NULL,
+      timestamp   INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_rejected_soldier ON rejected_packets(soldier_id, timestamp DESC);
   `);
 
   try {
     db.exec("ALTER TABLE telemetry ADD COLUMN floor TEXT");
   } catch {
     // Column already exists or table was just created with the column
+  }
+
+  try {
+    db.exec("ALTER TABLE telemetry ADD COLUMN mission_id TEXT");
+  } catch {
+    // Column already exists
+  }
+
+  try {
+    db.exec("ALTER TABLE telemetry ADD COLUMN altitude REAL");
+  } catch {
+    // Column already exists
+  }
+
+  try {
+    db.exec("ALTER TABLE telemetry ADD COLUMN accel_magnitude REAL");
+  } catch {
+    // Column already exists
+  }
+
+  // Seed default calibration if not present
+  const existingCalib = db.prepare("SELECT id FROM calibration WHERE id = 'default'").get();
+  if (!existingCalib) {
+    db.prepare(`
+      INSERT INTO calibration (id, translation_x, translation_y, translation_z, rotation_x, rotation_y, rotation_z, scale_x, scale_y, scale_z)
+      VALUES ('default', 0, 0, 0, 0, 0, 0, 1, 1, 1)
+    `).run();
+  }
+
+  // Seed default active mission if none exist
+  const existingMission = db.prepare("SELECT id FROM missions WHERE status = 'active' LIMIT 1").get();
+  if (!existingMission) {
+    const now = Date.now();
+    db.prepare(`
+      INSERT INTO missions (id, name, started_at, status, created_at)
+      VALUES (?, ?, ?, 'active', ?)
+    `).run("mission-live", "Operation Black Tornado (Live ICP)", now, now);
   }
 
   return db;

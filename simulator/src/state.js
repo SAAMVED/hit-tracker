@@ -35,11 +35,24 @@ export function initialState(def) {
     stairTransition: null,
     seq: 0,
     battery: initialBattery,
+    accelMagnitude: 1.0,
   };
 
   // Demo alert: Soldier D4 will drop packets for 15s to demonstrate SIGNAL LOST alert
   if (def.id === "D4") {
     state.nextCommLossMs = Date.now() + 15_000; // First drop after 15s
+  }
+
+  // Demo: Scripted man-down for Soldier C2 if SIM_MANDOWN=1
+  if (process.env.SIM_MANDOWN === "1" && def.id === "C2") {
+    state.manDownScriptedAt = Date.now() + 10_000; // Trigger after 10s of simulation
+    state.manDownActive = false;
+  }
+
+  // Demo: Occasional spoof packet injection for Soldier A4 if SIM_SPOOF=1
+  if (process.env.SIM_SPOOF === "1" && def.id === "A4") {
+    state.nextSpoofAt = Date.now() + 8_000;
+    state.spoofType = 0;
   }
 
   return state;
@@ -80,7 +93,19 @@ export function tick(state, dtSec = 1.0, nowMs = Date.now()) {
   }
 
   // ── Movement & Stair Navigation ────────────────────────────────────
-  if (state.stairTransition) {
+  const isManDownScripted = state.manDownScriptedAt && nowMs >= state.manDownScriptedAt;
+
+  if (isManDownScripted) {
+    if (!state.manDownActive) {
+      state.manDownActive = true;
+      state.accelMagnitude = 3.6; // Impact / fall spike before stillness
+      console.log(`[simulator] Soldier ${state.def.id} entered MAN DOWN (fall impact spike: 3.6g)`);
+    } else {
+      state.accelMagnitude = 1.000; // Zero variance stillness
+    }
+    // Cancel any stair transition and hold position frozen
+    state.stairTransition = null;
+  } else if (state.stairTransition) {
     const trans = state.stairTransition;
     const verticalStep = trans.climbSpeedMPerSec * dtSec;
     const diff = trans.targetAltitudeM - state.altitudeM;
@@ -88,6 +113,7 @@ export function tick(state, dtSec = 1.0, nowMs = Date.now()) {
     // Soldier converges to and stays within stairwell position while changing floors
     state.x = moveTowards(state.x, STAIRWELL_LOCATION.x, 0.6);
     state.y = moveTowards(state.y, STAIRWELL_LOCATION.y, 0.6);
+    state.accelMagnitude = 1.25 + (Math.random() - 0.5) * 0.2;
 
     if (Math.abs(diff) <= verticalStep) {
       // Reached destination landing
@@ -103,6 +129,7 @@ export function tick(state, dtSec = 1.0, nowMs = Date.now()) {
     // Normal room patrol inside building footprint
     state.x = randomWalk(state.x, BUILDING_BOUNDS.minX, BUILDING_BOUNDS.maxX, 0.5);
     state.y = randomWalk(state.y, BUILDING_BOUNDS.minY, BUILDING_BOUNDS.maxY, 0.5);
+    state.accelMagnitude = 1.0 + (Math.random() - 0.5) * 0.12;
 
     // Keep altitude anchored to the floor level
     const nominalFloorAltitude = state.floor * FLOOR_HEIGHT_M;
@@ -162,7 +189,44 @@ export function tick(state, dtSec = 1.0, nowMs = Date.now()) {
     batteryPct: Math.round(state.battery),
     signal: -55 - Math.floor(Math.random() * 40),
     altitude: Math.round(state.altitudeM * 100) / 100,
+    accelMagnitude: Math.round((state.accelMagnitude ?? 1.0) * 1000) / 1000,
   };
+
+  // ── Demo Alert: Inject occasional spoof packet for Soldier A4 (SIM_SPOOF=1) ──
+  if (state.nextSpoofAt && nowMs >= state.nextSpoofAt) {
+    state.nextSpoofAt = nowMs + 12_000;
+    const spoofType = (state.spoofType ?? 0) % 5;
+    state.spoofType = (state.spoofType ?? 0) + 1;
+
+    switch (spoofType) {
+      case 0:
+        // Impossible horizontal jump (> 10 m/s)
+        packet.x += 35.0;
+        console.log(`[simulator] INJECTED SPOOF: impossible horizontal speed for ${state.def.id}`);
+        break;
+      case 1:
+        // Out-of-order timestamp
+        packet.timestamp = nowMs - 8_000;
+        console.log(`[simulator] INJECTED SPOOF: out-of-order timestamp for ${state.def.id}`);
+        break;
+      case 2:
+        // Non-increasing sequence number
+        packet.seq = Math.max(0, state.seq - 2);
+        console.log(`[simulator] INJECTED SPOOF: duplicate sequence number for ${state.def.id}`);
+        break;
+      case 3:
+        // Impossible vertical / altitude jump
+        packet.altitude += 18.0;
+        packet.pressureHpa -= 2.2;
+        console.log(`[simulator] INJECTED SPOOF: impossible altitude jump for ${state.def.id}`);
+        break;
+      case 4:
+        // Out-of-range sensor reading
+        packet.batteryPct = 140;
+        console.log(`[simulator] INJECTED SPOOF: out-of-range battery percentage for ${state.def.id}`);
+        break;
+    }
+  }
 
   return packet;
 }

@@ -4,6 +4,10 @@ import {
   SoldierSchema,
   TeamSchema,
   LoginRequestSchema,
+  CalibrationSchema,
+  MissionSchema,
+  RejectedPacketSchema,
+  TelemetryPacketSchema,
 } from "../src/schemas.js";
 
 // ─── Alert Schema Tests ───────────────────────────────────────────────────────
@@ -95,5 +99,96 @@ describe("LoginRequestSchema", () => {
 
   it("rejects empty username", () => {
     expect(LoginRequestSchema.safeParse({ username: "", password: "secret" }).success).toBe(false);
+  });
+});
+
+// ─── Calibration Schema Tests ────────────────────────────────────────────────
+
+describe("CalibrationSchema", () => {
+  it("defaults to identity transformation when empty object passed", () => {
+    const res = CalibrationSchema.safeParse({});
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.translation).toEqual({ x: 0, y: 0, z: 0 });
+      expect(res.data.rotation).toEqual({ x: 0, y: 0, z: 0 });
+      expect(res.data.scale).toEqual({ x: 1, y: 1, z: 1 });
+    }
+  });
+
+  it("accepts custom translation, rotation and scale", () => {
+    const custom = {
+      translation: { x: 5.5, y: -2.0, z: 1.0 },
+      rotation: { x: 0, y: 45, z: 0 },
+      scale: { x: 1.2, y: 1.2, z: 1.2 },
+    };
+    const res = CalibrationSchema.safeParse(custom);
+    expect(res.success).toBe(true);
+  });
+
+  it("rejects non-positive scale", () => {
+    const invalid = { scale: { x: -1, y: 1, z: 1 } };
+    expect(CalibrationSchema.safeParse(invalid).success).toBe(false);
+  });
+});
+
+// ─── Mission Schema Tests ────────────────────────────────────────────────────
+
+describe("MissionSchema", () => {
+  it("accepts valid active mission", () => {
+    const mission = {
+      id: "mission-01",
+      name: "Operation Black Tornado",
+      startedAt: 1700000000000,
+      status: "active",
+    };
+    expect(MissionSchema.safeParse(mission).success).toBe(true);
+  });
+
+  it("rejects invalid status", () => {
+    const mission = {
+      id: "mission-01",
+      name: "Operation Black Tornado",
+      startedAt: 1700000000000,
+      status: "aborted",
+    };
+    expect(MissionSchema.safeParse(mission).success).toBe(false);
+  });
+});
+
+// ─── RejectedPacketSchema Tests ──────────────────────────────────────────────
+
+describe("RejectedPacketSchema", () => {
+  it("accepts valid rejected packet entry", () => {
+    const entry = {
+      soldierId: "A4",
+      reason: "IMPOSSIBLE_HORIZONTAL_SPEED",
+      rawPayload: '{"x": 100}',
+      timestamp: 1700000000000,
+    };
+    expect(RejectedPacketSchema.safeParse(entry).success).toBe(true);
+  });
+});
+
+// ─── TelemetryPacketSchema Accel Tests ───────────────────────────────────────
+
+describe("TelemetryPacketSchema with accelMagnitude", () => {
+  const basePkt = {
+    soldierId: "A1",
+    teamId: "Alpha",
+    seq: 1,
+    timestamp: 1700000000000,
+    x: 0,
+    y: 0,
+    pressureHpa: 1013.25,
+    batteryPct: 90,
+    signal: -60,
+  };
+
+  it("accepts packet with valid accelMagnitude", () => {
+    expect(TelemetryPacketSchema.safeParse({ ...basePkt, accelMagnitude: 1.05 }).success).toBe(true);
+  });
+
+  it("rejects negative accelMagnitude", () => {
+    expect(TelemetryPacketSchema.safeParse({ ...basePkt, accelMagnitude: -0.5 }).success).toBe(false);
   });
 });

@@ -153,7 +153,11 @@ export default function Roster({ role, soldiers, alerts, onSelectSoldier }) {
                             : "bg-amber-500/30 text-amber-300 border border-amber-500/40"
                         }`}
                       >
-                        {alert.type === "signal_lost" ? "SIGNAL LOST" : "LOW BATT"}
+                        {alert.type === "signal_lost"
+                          ? "SIGNAL LOST"
+                          : alert.type === "man_down"
+                          ? "MAN DOWN"
+                          : "LOW BATT"}
                       </span>
                     ) : hasTelemetry ? (
                       <span className="text-[10px] text-gray-500">

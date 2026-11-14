@@ -4,21 +4,77 @@ import FloorSelector from "./FloorSelector.jsx";
 import Roster from "./Roster.jsx";
 import Viewport from "./Viewport.jsx";
 import AlertsPanel from "./AlertsPanel.jsx";
+import ReplayControls from "./ReplayControls.jsx";
+import ModelCalibrationModal from "./ModelCalibrationModal.jsx";
+import SecurityLogModal from "./SecurityLogModal.jsx";
 import { playCriticalAlertBeep } from "../utils/audio.js";
 
 export default function Dashboard({ auth, onLogout }) {
+  const [mode, setMode] = useState("live"); // "live" | "replay"
   const [activeFloor, setActiveFloor] = useState(0);
   const [floorMode, setFloorMode] = useState("cutaway");
   const [connected, setConnected] = useState(false);
-  const [soldiers, setSoldiers] = useState({});
-  const [trails, setTrails] = useState({});
-  const [alerts, setAlerts] = useState([]);
+  const [liveSoldiers, setLiveSoldiers] = useState({});
+  const [liveTrails, setLiveTrails] = useState({});
+  const [liveAlerts, setLiveAlerts] = useState([]);
   const [selectedSoldierId, setSelectedSoldierId] = useState(null);
+
+  // ── Calibration State ───────────────────────────────────────────────────────
+  const [isCalibrationOpen, setIsCalibrationOpen] = useState(false);
+  const [calibration, setCalibration] = useState({
+    translation: { x: 0, y: 0, z: 0 },
+    rotation: { x: 0, y: 0, z: 0 },
+    scale: { x: 1, y: 1, z: 1 },
+  });
+
+  // ── Security Log State ──────────────────────────────────────────────────────
+  const [isSecurityLogOpen, setIsSecurityLogOpen] = useState(false);
+
+  // ── Replay State ────────────────────────────────────────────────────────────
+  const [missions, setMissions] = useState([]);
+  const [selectedMissionId, setSelectedMissionId] = useState(null);
+  const [replayPackets, setReplayPackets] = useState([]);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [playbackSpeed, setPlaybackSpeed] = useState(1);
+  const [replayTime, setReplayTime] = useState(null);
+  const [replayRange, setReplayRange] = useState({ min: 0, max: 0 });
 
   const wsRef = useRef(null);
   const reconnectTimeoutRef = useRef(null);
+  const playTimerRef = useRef(null);
 
-  // ── WebSocket Pipeline ───────────────────────────────────────────────────────
+  // ── Fetch Calibration on Start ──────────────────────────────────────────────
+  useEffect(() => {
+    fetch("/api/calibration")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data && data.translation && data.rotation && data.scale) {
+          setCalibration({
+            translation: data.translation,
+            rotation: data.rotation,
+            scale: data.scale,
+          });
+        }
+      })
+      .catch((err) => console.warn("[dashboard] Calibration fetch error:", err));
+  }, []);
+
+  const handleSaveCalibration = async () => {
+    const res = await fetch("/api/calibration", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${auth.token}`,
+      },
+      body: JSON.stringify(calibration),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || "Failed to save calibration");
+    }
+  };
+
+  // ── Live WebSocket Pipeline ─────────────────────────────────────────────────
   const connectWebSocket = useCallback(() => {
     if (wsRef.current) {
       wsRef.current.close();
@@ -49,7 +105,7 @@ export default function Dashboard({ auth, onLogout }) {
         // 2. Initial Snapshot
         else if (msg.type === "snapshot") {
           const list = msg.payload || msg.soldiers || [];
-          setSoldiers((prev) => {
+          setLiveSoldiers((prev) => {
             const next = { ...prev };
             for (const s of list) {
               if (s && s.soldierId) {
@@ -64,13 +120,13 @@ export default function Dashboard({ auth, onLogout }) {
         else if (msg.type === "telemetry") {
           const s = msg.payload || msg;
           if (s && s.soldierId) {
-            setSoldiers((prev) => ({
+            setLiveSoldiers((prev) => ({
               ...prev,
               [s.soldierId]: s,
             }));
 
             // Record breadcrumb trail point
-            setTrails((prev) => {
+            setLiveTrails((prev) => {
               const currentTrail = prev[s.soldierId] ?? [];
               const newPoint = [s.x, s.altitude, s.y];
               // Keep maximum of 30 trail points per soldier
@@ -85,11 +141,11 @@ export default function Dashboard({ auth, onLogout }) {
           const alert = msg.payload || msg;
           if (alert && alert.id) {
             if (alert.severity === "critical") {
-              // Play tactical audio beep for critical alert
+              // Play tactical audio beep for critical alert (Signal lost / Man down)
               playCriticalAlertBeep();
             }
 
-            setAlerts((prev) => {
+            setLiveAlerts((prev) => {
               // Deduplicate alert by ID
               const existingIdx = prev.findIndex((a) => a.id === alert.id);
               if (existingIdx >= 0) {
@@ -126,6 +182,107 @@ export default function Dashboard({ auth, onLogout }) {
     };
   }, [connectWebSocket]);
 
+  // ── Replay Missions Fetch & Selection ───────────────────────────────────────
+  const fetchMissions = useCallback(async () => {
+    try {
+      const res = await fetch("/api/missions");
+      if (res.ok) {
+        const data = await res.json();
+        setMissions(data);
+        if (data.length > 0 && !selectedMissionId) {
+          setSelectedMissionId(data[0].id);
+        }
+      }
+    } catch (err) {
+      console.error("[dashboard] Failed to fetch missions:", err);
+    }
+  }, [selectedMissionId]);
+
+  useEffect(() => {
+    if (mode === "replay") {
+      fetchMissions();
+    }
+  }, [mode, fetchMissions]);
+
+  // Load telemetry for selected mission
+  useEffect(() => {
+    if (mode !== "replay" || !selectedMissionId) return;
+
+    fetch(`/api/missions/${encodeURIComponent(selectedMissionId)}/telemetry`)
+      .then((res) => (res.ok ? res.json() : []))
+      .then((packets) => {
+        setReplayPackets(packets);
+        if (packets.length > 0) {
+          const minTs = packets[0].timestamp;
+          const maxTs = packets[packets.length - 1].timestamp;
+          setReplayRange({ min: minTs, max: maxTs });
+          setReplayTime(minTs);
+        } else {
+          setReplayRange({ min: 0, max: 0 });
+          setReplayTime(0);
+        }
+        setIsPlaying(false);
+      })
+      .catch((err) => console.error("[dashboard] Failed to load replay telemetry:", err));
+  }, [mode, selectedMissionId]);
+
+  // Replay playback timer
+  useEffect(() => {
+    if (!isPlaying || mode !== "replay") {
+      if (playTimerRef.current) clearInterval(playTimerRef.current);
+      return;
+    }
+
+    const stepMs = 200;
+    playTimerRef.current = setInterval(() => {
+      setReplayTime((prev) => {
+        if (prev === null) return prev;
+        const next = prev + stepMs * playbackSpeed;
+        if (next >= replayRange.max) {
+          setIsPlaying(false);
+          return replayRange.max;
+        }
+        return next;
+      });
+    }, stepMs);
+
+    return () => {
+      if (playTimerRef.current) clearInterval(playTimerRef.current);
+    };
+  }, [isPlaying, playbackSpeed, replayRange.max, mode]);
+
+  // ── Replay Mode Derived State ───────────────────────────────────────────────
+  const replayState = useMemo(() => {
+    if (mode !== "replay" || replayTime === null) {
+      return { soldiers: {}, trails: {} };
+    }
+
+    const soldiersMap = {};
+    const trailsMap = {};
+
+    // Filter packets up to replayTime
+    for (const pkt of replayPackets) {
+      if (pkt.timestamp <= replayTime) {
+        soldiersMap[pkt.soldierId] = pkt;
+
+        // Keep trails in a 30s window preceding current replay time
+        if (pkt.timestamp >= replayTime - 30_000) {
+          if (!trailsMap[pkt.soldierId]) {
+            trailsMap[pkt.soldierId] = [];
+          }
+          trailsMap[pkt.soldierId].push([pkt.x, pkt.altitude ?? 0, pkt.y]);
+        }
+      }
+    }
+
+    return { soldiers: soldiersMap, trails: trailsMap };
+  }, [mode, replayTime, replayPackets]);
+
+  // Current active soldiers, trails, alerts depending on mode
+  const activeSoldiers = mode === "replay" ? replayState.soldiers : liveSoldiers;
+  const activeTrails = mode === "replay" ? replayState.trails : liveTrails;
+  const activeAlerts = mode === "replay" ? [] : liveAlerts;
+
   // ── Calculate Unit Counts per Floor ─────────────────────────────────────────
   const unitCounts = useMemo(() => {
     const counts = {
@@ -138,18 +295,18 @@ export default function Dashboard({ auth, onLogout }) {
       "-1": 0,
       "-2": 0,
     };
-    for (const soldier of Object.values(soldiers)) {
+    for (const soldier of Object.values(activeSoldiers)) {
       if (soldier.estimatedFloor) {
         const fNum = floorLabelToNumber(soldier.estimatedFloor);
         counts[fNum] = (counts[fNum] ?? 0) + 1;
       }
     }
     return counts;
-  }, [soldiers]);
+  }, [activeSoldiers]);
 
   // ── Alert Actions ───────────────────────────────────────────────────────────
   const handleAcknowledgeAlert = (id) => {
-    setAlerts((prev) =>
+    setLiveAlerts((prev) =>
       prev.map((a) =>
         a.id === id ? { ...a, acknowledged: true, acknowledgedBy: auth.role } : a
       )
@@ -157,7 +314,7 @@ export default function Dashboard({ auth, onLogout }) {
   };
 
   const handleClearAlert = (id) => {
-    setAlerts((prev) => prev.filter((a) => a.id !== id));
+    setLiveAlerts((prev) => prev.filter((a) => a.id !== id));
   };
 
   return (
@@ -174,24 +331,83 @@ export default function Dashboard({ auth, onLogout }) {
           <span className="text-[10px] text-emerald-400 bg-emerald-950/40 border border-emerald-500/30 rounded px-1.5 py-0.5 uppercase font-bold">
             {auth.role}
           </span>
+
+          {/* Mode Switcher: LIVE vs REPLAY */}
+          <div className="flex items-center ml-2 bg-black/40 border border-nsg-border rounded p-0.5">
+            <button
+              onClick={() => {
+                setMode("live");
+                setIsPlaying(false);
+              }}
+              className={`px-2.5 py-0.5 rounded text-[10px] font-bold tracking-wider uppercase transition-colors ${
+                mode === "live"
+                  ? "bg-nsg-accent text-nsg-dark"
+                  : "text-gray-400 hover:text-white"
+              }`}
+            >
+              Live
+            </button>
+            <button
+              onClick={() => {
+                setMode("replay");
+                setIsPlaying(false);
+              }}
+              className={`px-2.5 py-0.5 rounded text-[10px] font-bold tracking-wider uppercase transition-colors ${
+                mode === "replay"
+                  ? "bg-blue-500 text-white"
+                  : "text-gray-400 hover:text-white"
+              }`}
+            >
+              Replay
+            </button>
+          </div>
         </div>
 
         {/* Live Status indicator */}
         <div className="flex items-center gap-2">
-          <span
-            className={`h-2.5 w-2.5 rounded-full ${
-              connected ? "bg-nsg-accent animate-pulse" : "bg-red-500"
-            }`}
-          />
-          <span className="text-xs font-bold text-gray-300">
-            {connected ? "LIVE TELEMETRY" : "CONNECTING..."}
-          </span>
-          <span className="text-[10px] text-gray-500 ml-2">
-            ({Object.keys(soldiers).length} soldiers online)
-          </span>
+          {mode === "live" ? (
+            <>
+              <span
+                className={`h-2.5 w-2.5 rounded-full ${
+                  connected ? "bg-nsg-accent animate-pulse" : "bg-red-500"
+                }`}
+              />
+              <span className="text-xs font-bold text-gray-300">
+                {connected ? "LIVE TELEMETRY" : "CONNECTING..."}
+              </span>
+              <span className="text-[10px] text-gray-500 ml-2">
+                ({Object.keys(activeSoldiers).length} soldiers online)
+              </span>
+            </>
+          ) : (
+            <div className="flex items-center gap-2">
+              <span className="h-2.5 w-2.5 rounded-full bg-blue-400 animate-pulse" />
+              <span className="text-xs font-bold text-blue-300 tracking-wider uppercase">
+                Mission Replay Mode ({replayPackets.length} pkts)
+              </span>
+            </div>
+          )}
         </div>
 
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-3">
+          {/* Commander Tools */}
+          {auth.role === "commander" && (
+            <>
+              <button
+                onClick={() => setIsCalibrationOpen(true)}
+                className="px-2 py-1 rounded border border-nsg-border bg-nsg-dark hover:bg-nsg-border/50 text-[10px] text-nsg-accent uppercase font-bold tracking-wider transition-colors"
+              >
+                Calibration
+              </button>
+              <button
+                onClick={() => setIsSecurityLogOpen(true)}
+                className="px-2 py-1 rounded border border-red-500/40 bg-red-950/30 hover:bg-red-950/60 text-[10px] text-red-300 uppercase font-bold tracking-wider transition-colors"
+              >
+                Security Log
+              </button>
+            </>
+          )}
+
           <span className="text-xs text-gray-400">
             {new Date().toLocaleDateString("en-IN", {
               weekday: "short",
@@ -226,29 +442,33 @@ export default function Dashboard({ auth, onLogout }) {
             floor={activeFloor}
             floorMode={floorMode}
             onFloorModeChange={setFloorMode}
-            soldiers={soldiers}
-            trails={trails}
+            soldiers={activeSoldiers}
+            trails={activeTrails}
             selectedSoldierId={selectedSoldierId}
+            calibration={calibration}
+            alerts={activeAlerts}
           />
 
-          {/* Floating Alerts Overlay */}
-          <AlertsPanel
-            alerts={alerts}
-            onAcknowledge={handleAcknowledgeAlert}
-            onClear={handleClearAlert}
-          />
+          {/* Floating Alerts Overlay (Live mode) */}
+          {mode === "live" && (
+            <AlertsPanel
+              alerts={activeAlerts}
+              onAcknowledge={handleAcknowledgeAlert}
+              onClear={handleClearAlert}
+            />
+          )}
         </main>
 
         {/* Right: Roster Panel grouped by HIT */}
         <aside className="w-72 bg-nsg-surface border-l border-nsg-border overflow-y-auto flex-shrink-0 z-20">
           <Roster
             role={auth.role}
-            soldiers={soldiers}
-            alerts={alerts}
+            soldiers={activeSoldiers}
+            alerts={activeAlerts}
             onSelectSoldier={(id) => {
               setSelectedSoldierId(id);
               // Focus floor on selected soldier's floor if available
-              const s = soldiers[id];
+              const s = activeSoldiers[id];
               if (s && s.estimatedFloor) {
                 setActiveFloor(floorLabelToNumber(s.estimatedFloor));
               }
@@ -256,6 +476,44 @@ export default function Dashboard({ auth, onLogout }) {
           />
         </aside>
       </div>
+
+      {/* ── Replay Scrubber Controls (Replay mode only) ───────────────────── */}
+      {mode === "replay" && (
+        <ReplayControls
+          isPlaying={isPlaying}
+          onTogglePlay={() => setIsPlaying(!isPlaying)}
+          playbackSpeed={playbackSpeed}
+          onChangeSpeed={setPlaybackSpeed}
+          currentTime={replayTime}
+          startTime={replayRange.min}
+          endTime={replayRange.max}
+          onSeek={(newTime) => setReplayTime(newTime)}
+          missions={missions}
+          selectedMissionId={selectedMissionId}
+          onSelectMission={(id) => setSelectedMissionId(id)}
+        />
+      )}
+
+      {/* ── Commander Modals ─────────────────────────────────────────────── */}
+      {auth.role === "commander" && (
+        <>
+          <ModelCalibrationModal
+            isOpen={isCalibrationOpen}
+            onClose={() => setIsCalibrationOpen(false)}
+            calibration={calibration}
+            onChangeCalibration={setCalibration}
+            onSaveCalibration={handleSaveCalibration}
+            authToken={auth.token}
+            role={auth.role}
+          />
+          <SecurityLogModal
+            isOpen={isSecurityLogOpen}
+            onClose={() => setIsSecurityLogOpen(false)}
+            authToken={auth.token}
+            role={auth.role}
+          />
+        </>
+      )}
     </div>
   );
 }

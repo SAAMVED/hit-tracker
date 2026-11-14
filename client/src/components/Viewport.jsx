@@ -17,6 +17,11 @@ const TEAM_COLORS = {
 function BuildingModel({
   activeFloor,
   floorMode,
+  calibration = {
+    translation: { x: 0, y: 0, z: 0 },
+    rotation: { x: 0, y: 0, z: 0 },
+    scale: { x: 1, y: 1, z: 1 },
+  },
 }) {
   const { scene } = useGLTF("/models/sample-building.glb");
   const clonedScene = useMemo(() => scene.clone(true), [scene]);
@@ -56,7 +61,27 @@ function BuildingModel({
     });
   }, [clonedScene, activeFloor, floorMode]);
 
-  return <primitive object={clonedScene} />;
+  const pos = [
+    calibration?.translation?.x ?? 0,
+    calibration?.translation?.y ?? 0,
+    calibration?.translation?.z ?? 0,
+  ];
+  const rot = [
+    ((calibration?.rotation?.x ?? 0) * Math.PI) / 180,
+    ((calibration?.rotation?.y ?? 0) * Math.PI) / 180,
+    ((calibration?.rotation?.z ?? 0) * Math.PI) / 180,
+  ];
+  const sca = [
+    calibration?.scale?.x ?? 1,
+    calibration?.scale?.y ?? 1,
+    calibration?.scale?.z ?? 1,
+  ];
+
+  return (
+    <group position={pos} rotation={rot} scale={sca}>
+      <primitive object={clonedScene} />
+    </group>
+  );
 }
 
 function configureMaterial(material, isTarget) {
@@ -73,6 +98,7 @@ function SoldierMarker({
   activeFloor,
   floorMode,
   isSelected,
+  isManDown,
 }) {
   const soldierFloorNum = floorLabelToNumber(soldier.estimatedFloor);
 
@@ -84,7 +110,7 @@ function SoldierMarker({
     isVisible = soldierFloorNum <= activeFloor;
   }
 
-  const teamColor = TEAM_COLORS[soldier.teamId] ?? "#10b981";
+  const teamColor = isManDown ? "#ef4444" : TEAM_COLORS[soldier.teamId] ?? "#10b981";
   const pos = [
     soldier.x,
     soldier.altitude + 0.4,
@@ -99,34 +125,58 @@ function SoldierMarker({
       <mesh position={[0, 0.4, 0]}>
         <cylinderGeometry args={[0.3, 0.1, 0.8, 16]} />
         <meshStandardMaterial
-          color={teamColor}
-          emissive={teamColor}
-          emissiveIntensity={isSelected ? 0.8 : 0.3}
+          color={isManDown ? "#ff0000" : teamColor}
+          emissive={isManDown ? "#ff0000" : teamColor}
+          emissiveIntensity={isManDown ? 1.5 : isSelected ? 0.8 : 0.3}
           roughness={0.2}
         />
       </mesh>
 
       {/* Pulsing ring on floor */}
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.05, 0]}>
-        <ringGeometry args={[0.35, 0.5, 24]} />
+        <ringGeometry args={[0.35, isManDown ? 0.75 : 0.5, 24]} />
         <meshBasicMaterial
-          color={teamColor}
+          color={isManDown ? "#ef4444" : teamColor}
           transparent
-          opacity={isSelected ? 0.9 : 0.6}
+          opacity={isManDown ? 0.95 : isSelected ? 0.9 : 0.6}
         />
       </mesh>
 
+      {/* Secondary outer pulsing alarm ring for MAN DOWN */}
+      {isManDown && (
+        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.04, 0]}>
+          <ringGeometry args={[0.8, 1.25, 32]} />
+          <meshBasicMaterial
+            color="#ff0000"
+            transparent
+            opacity={0.8}
+          />
+        </mesh>
+      )}
+
       {/* Floating Tactical Label */}
-      <Html position={[0, 1.1, 0]} center distanceFactor={15}>
-        <div className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-black/80 border border-white/30 text-[10px] font-mono font-bold text-white whitespace-nowrap shadow-md pointer-events-none">
+      <Html position={[0, 1.2, 0]} center distanceFactor={15}>
+        <div
+          className={`flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] font-mono font-bold whitespace-nowrap shadow-md pointer-events-none ${
+            isManDown
+              ? "bg-red-950/95 border-red-500 text-red-200 ring-2 ring-red-500 animate-pulse"
+              : "bg-black/80 border-white/30 text-white"
+          }`}
+        >
           <span
-            className="w-2 h-2 rounded-full"
+            className={`w-2 h-2 rounded-full ${isManDown ? "bg-red-500 animate-ping" : ""}`}
             style={{ backgroundColor: teamColor }}
           />
           <span>{soldier.soldierId}</span>
-          <span className="text-emerald-400 text-[9px]">
-            [{soldier.estimatedFloor}]
-          </span>
+          {isManDown ? (
+            <span className="bg-red-600 text-white px-1 rounded text-[8px] tracking-wider uppercase font-extrabold animate-pulse">
+              MAN DOWN
+            </span>
+          ) : (
+            <span className="text-emerald-400 text-[9px]">
+              [{soldier.estimatedFloor}]
+            </span>
+          )}
         </div>
       </Html>
     </group>
@@ -172,8 +222,21 @@ export default function Viewport({
   soldiers,
   trails,
   selectedSoldierId,
+  calibration,
+  alerts = [],
 }) {
   const soldiersList = useMemo(() => Object.values(soldiers), [soldiers]);
+
+  // Set of soldiers who currently have an active MAN DOWN alert
+  const manDownSoldierIds = useMemo(() => {
+    const set = new Set();
+    for (const a of alerts) {
+      if (a.type === "man_down" && !a.acknowledged) {
+        set.add(a.soldierId);
+      }
+    }
+    return set;
+  }, [alerts]);
 
   return (
     <div className="w-full h-full relative select-none">
@@ -247,8 +310,12 @@ export default function Viewport({
           position={[15, -7.2, 10]}
         />
 
-        {/* Procedural Building Model */}
-        <BuildingModel activeFloor={floor} floorMode={floorMode} />
+        {/* Procedural Building Model with Calibration */}
+        <BuildingModel
+          activeFloor={floor}
+          floorMode={floorMode}
+          calibration={calibration}
+        />
 
         {/* 3D Movement Trails */}
         {soldiersList.map((s) => {
@@ -275,6 +342,7 @@ export default function Viewport({
             activeFloor={floor}
             floorMode={floorMode}
             isSelected={selectedSoldierId === s.soldierId}
+            isManDown={manDownSoldierIds.has(s.soldierId)}
           />
         ))}
 

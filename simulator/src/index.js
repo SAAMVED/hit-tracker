@@ -28,6 +28,12 @@ function connect() {
 
   ws.on("open", () => {
     console.log(`[simulator] Connected. Sending telemetry for ${states.length} soldiers at ${TICK_MS}ms intervals.`);
+    if (process.env.SIM_MANDOWN === "1") {
+      console.log("[simulator] SIM_MANDOWN=1 active: Soldier C2 will trigger man-down in 10s");
+    }
+    if (process.env.SIM_SPOOF === "1") {
+      console.log("[simulator] SIM_SPOOF=1 active: Soldier A4 will inject invalid/spoofed packets every 12s");
+    }
     if (reconnectTimer) {
       clearTimeout(reconnectTimer);
       reconnectTimer = null;

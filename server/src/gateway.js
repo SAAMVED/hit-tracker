@@ -3,6 +3,7 @@ import {
   AlertsEngine,
   FloorEstimator,
   IngestMessageSchema,
+  validatePacket,
 } from "@hit-tracker/shared";
 import { verifyToken } from "./auth.js";
 
@@ -17,6 +18,9 @@ const alertsEngine = new AlertsEngine();
 
 /** Cache of the latest live state for each soldier to serve snapshots */
 const latestSoldierStates = new Map();
+
+/** Map of last accepted valid telemetry packet per soldier for validation */
+const lastValidPackets = new Map();
 
 /**
  * Retrieves or initializes a FloorEstimator for a soldier.
@@ -111,12 +115,40 @@ export function createWebSocketGateway(httpServer, db) {
       const parsed = IngestMessageSchema.safeParse(raw);
       if (!parsed.success) return;
 
-      packetsProcessedThisSec++;
       const pkt = parsed.data.payload;
 
-      // 1. Run barometric floor estimation per soldier (P0 from first reading)
+      // 2. Validate telemetry packet physics and detect spoofing/corruption
+      const prevPkt = lastValidPackets.get(pkt.soldierId);
+      const validation = validatePacket(prevPkt, pkt);
+      if (!validation.valid) {
+        console.warn(`[gateway] Rejected packet from ${pkt.soldierId}: ${validation.reason}`);
+        try {
+          db.prepare(`
+            INSERT INTO rejected_packets (soldier_id, reason, raw_payload, timestamp)
+            VALUES (?, ?, ?, ?)
+          `).run(
+            pkt.soldierId || "UNKNOWN",
+            validation.reason || "REJECTED",
+            JSON.stringify(raw),
+            pkt.timestamp || Date.now()
+          );
+        } catch (dbErr) {
+          console.error("[gateway] Failed to log rejected packet:", dbErr);
+        }
+        return; // Drop rejected packet
+      }
+
+      // Valid packet: update memory state with immutable snapshot of raw packet
+      lastValidPackets.set(pkt.soldierId, { ...pkt });
+      packetsProcessedThisSec++;
+
+      // 3. Run barometric floor estimation per soldier (P0 from first reading)
       const estimator = getOrCreateEstimator(pkt.soldierId, pkt.pressureHpa);
       const estimation = estimator.update(pkt.pressureHpa, pkt.timestamp);
+
+      // Query active mission
+      const activeMission = db.prepare("SELECT id FROM missions WHERE status = 'active' ORDER BY started_at DESC LIMIT 1").get();
+      pkt.missionId = activeMission?.id ?? "mission-live";
 
       // Construct live soldier state
       const soldierState = {
@@ -130,6 +162,7 @@ export function createWebSocketGateway(httpServer, db) {
         timestamp: pkt.timestamp,
         signal: pkt.signal,
         seq: pkt.seq,
+        accelMagnitude: pkt.accelMagnitude ?? 1.0,
       };
       latestSoldierStates.set(pkt.soldierId, soldierState);
 
@@ -138,7 +171,7 @@ export function createWebSocketGateway(httpServer, db) {
       pkt.altitude = soldierState.altitude;
       storeTelemetry(db, pkt);
 
-      // 2. Broadcast resulting soldier state as {"type":"telemetry", ...}
+      // Broadcast resulting soldier state as {"type":"telemetry", ...}
       // Provide both wrapped and top-level properties for versatile client consumption
       const telemetryMessage = {
         type: "telemetry",
@@ -147,11 +180,15 @@ export function createWebSocketGateway(httpServer, db) {
       };
       broadcastToDashboard(telemetryMessage);
 
-      // Run alerts check (floor transition, low battery)
+      // Run alerts check (floor transition, low battery, man down)
       const alerts = alertsEngine.processTelemetry(
         {
           soldierId: pkt.soldierId,
           teamId: pkt.teamId,
+          x: pkt.x,
+          y: pkt.y,
+          altitude: soldierState.altitude,
+          accelMagnitude: pkt.accelMagnitude ?? 1.0,
           batteryPct: pkt.batteryPct,
           lastSeenAt: pkt.timestamp,
           floor: estimation.floor,
@@ -221,8 +258,8 @@ function storeTelemetry(db, pkt) {
   try {
     db.prepare(`
       INSERT INTO telemetry
-        (soldier_id, team_id, seq, ts, x, y, pressure_hpa, battery_pct, signal, floor)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (soldier_id, team_id, seq, ts, x, y, pressure_hpa, battery_pct, signal, floor, mission_id, altitude, accel_magnitude)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       pkt.soldierId,
       pkt.teamId,
@@ -233,7 +270,10 @@ function storeTelemetry(db, pkt) {
       pkt.pressureHpa,
       pkt.batteryPct,
       pkt.signal,
-      pkt.estimatedFloor ?? null
+      pkt.estimatedFloor ?? null,
+      pkt.missionId ?? null,
+      pkt.altitude ?? null,
+      pkt.accelMagnitude ?? 1.0
     );
   } catch (err) {
     console.error("[gateway] SQLite insert error:", err);

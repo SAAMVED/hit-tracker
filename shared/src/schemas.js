@@ -33,6 +33,8 @@ export const TelemetryPacketSchema = z.object({
   estimatedFloor: FloorLabelSchema.optional(),
   /** Estimated relative altitude in metres */
   altitude: z.number().finite().optional(),
+  /** Accelerometer magnitude (in g, ~1.0 nominal) */
+  accelMagnitude: z.number().finite().nonnegative().optional(),
 });
 
 // ─── Soldier ─────────────────────────────────────────────────────────────────
@@ -108,6 +110,7 @@ export const SoldierLiveStateSchema = z.object({
   timestamp: z.number().int().positive(),
   seq: z.number().int().nonnegative().optional(),
   signal: z.number().optional(),
+  accelMagnitude: z.number().optional(),
 });
 
 // ─── WebSocket Messages ───────────────────────────────────────────────────────
@@ -178,3 +181,45 @@ export const METRES_PER_HPA = 8.3;
 
 /** Height of one building floor in metres (configurable, default: 3.5 m) */
 export const FLOOR_HEIGHT_M = 3.5;
+
+// ─── Model Calibration ────────────────────────────────────────────────────────
+
+export const Vector3Schema = z.object({
+  x: z.number().finite().default(0),
+  y: z.number().finite().default(0),
+  z: z.number().finite().default(0),
+});
+
+export const CalibrationSchema = z.object({
+  translation: Vector3Schema.default({ x: 0, y: 0, z: 0 }),
+  rotation: Vector3Schema.default({ x: 0, y: 0, z: 0 }),
+  scale: z.object({
+    x: z.number().finite().positive().default(1),
+    y: z.number().finite().positive().default(1),
+    z: z.number().finite().positive().default(1),
+  }).default({ x: 1, y: 1, z: 1 }),
+});
+
+// ─── Missions & Replay ────────────────────────────────────────────────────────
+
+export const MissionStatusSchema = z.enum(["active", "completed"]);
+
+export const MissionSchema = z.object({
+  id: z.string().min(1).max(64),
+  name: z.string().min(1).max(128),
+  startedAt: z.number().int().positive(),
+  endedAt: z.number().int().positive().nullable().optional(),
+  status: MissionStatusSchema.default("active"),
+  createdAt: z.number().int().positive().optional(),
+});
+
+// ─── Rejected Telemetry (Security Log) ────────────────────────────────────────
+
+export const RejectedPacketSchema = z.object({
+  id: z.number().int().optional(),
+  soldierId: z.string(),
+  reason: z.string(),
+  rawPayload: z.string(),
+  timestamp: z.number().int().positive(),
+});
+
