@@ -1,29 +1,22 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
-import type { Alert } from "@hit-tracker/shared";
 import { floorLabelToNumber } from "@hit-tracker/shared";
-import type { AuthState } from "../App.tsx";
-import FloorSelector from "./FloorSelector.tsx";
-import Roster, { type SoldierStateDisplay } from "./Roster.tsx";
-import Viewport, { type FloorMode } from "./Viewport.tsx";
-import AlertsPanel from "./AlertsPanel.tsx";
-import { playCriticalAlertBeep } from "../utils/audio.ts";
+import FloorSelector from "./FloorSelector.jsx";
+import Roster from "./Roster.jsx";
+import Viewport from "./Viewport.jsx";
+import AlertsPanel from "./AlertsPanel.jsx";
+import { playCriticalAlertBeep } from "../utils/audio.js";
 
-interface Props {
-  auth: AuthState;
-  onLogout: () => void;
-}
+export default function Dashboard({ auth, onLogout }) {
+  const [activeFloor, setActiveFloor] = useState(0);
+  const [floorMode, setFloorMode] = useState("cutaway");
+  const [connected, setConnected] = useState(false);
+  const [soldiers, setSoldiers] = useState({});
+  const [trails, setTrails] = useState({});
+  const [alerts, setAlerts] = useState([]);
+  const [selectedSoldierId, setSelectedSoldierId] = useState(null);
 
-export default function Dashboard({ auth, onLogout }: Props) {
-  const [activeFloor, setActiveFloor] = useState<number>(0);
-  const [floorMode, setFloorMode] = useState<FloorMode>("cutaway");
-  const [connected, setConnected] = useState<boolean>(false);
-  const [soldiers, setSoldiers] = useState<Record<string, SoldierStateDisplay>>({});
-  const [trails, setTrails] = useState<Record<string, [number, number, number][]>>({});
-  const [alerts, setAlerts] = useState<Alert[]>([]);
-  const [selectedSoldierId, setSelectedSoldierId] = useState<string | null>(null);
-
-  const wsRef = useRef<WebSocket | null>(null);
-  const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const wsRef = useRef(null);
+  const reconnectTimeoutRef = useRef(null);
 
   // ── WebSocket Pipeline ───────────────────────────────────────────────────────
   const connectWebSocket = useCallback(() => {
@@ -55,7 +48,7 @@ export default function Dashboard({ auth, onLogout }: Props) {
 
         // 2. Initial Snapshot
         else if (msg.type === "snapshot") {
-          const list: SoldierStateDisplay[] = msg.payload || msg.soldiers || [];
+          const list = msg.payload || msg.soldiers || [];
           setSoldiers((prev) => {
             const next = { ...prev };
             for (const s of list) {
@@ -69,7 +62,7 @@ export default function Dashboard({ auth, onLogout }: Props) {
 
         // 3. Live Telemetry
         else if (msg.type === "telemetry") {
-          const s: SoldierStateDisplay = msg.payload || msg;
+          const s = msg.payload || msg;
           if (s && s.soldierId) {
             setSoldiers((prev) => ({
               ...prev,
@@ -79,7 +72,7 @@ export default function Dashboard({ auth, onLogout }: Props) {
             // Record breadcrumb trail point
             setTrails((prev) => {
               const currentTrail = prev[s.soldierId] ?? [];
-              const newPoint: [number, number, number] = [s.x, s.altitude, s.y];
+              const newPoint = [s.x, s.altitude, s.y];
               // Keep maximum of 30 trail points per soldier
               const updated = [...currentTrail.slice(-29), newPoint];
               return { ...prev, [s.soldierId]: updated };
@@ -89,7 +82,7 @@ export default function Dashboard({ auth, onLogout }: Props) {
 
         // 4. Alert Event
         else if (msg.type === "alert") {
-          const alert: Alert = msg.payload || msg;
+          const alert = msg.payload || msg;
           if (alert && alert.id) {
             if (alert.severity === "critical") {
               // Play tactical audio beep for critical alert
@@ -135,7 +128,7 @@ export default function Dashboard({ auth, onLogout }: Props) {
 
   // ── Calculate Unit Counts per Floor ─────────────────────────────────────────
   const unitCounts = useMemo(() => {
-    const counts: Record<number, number> = {
+    const counts = {
       5: 0,
       4: 0,
       3: 0,
@@ -155,7 +148,7 @@ export default function Dashboard({ auth, onLogout }: Props) {
   }, [soldiers]);
 
   // ── Alert Actions ───────────────────────────────────────────────────────────
-  const handleAcknowledgeAlert = (id: string) => {
+  const handleAcknowledgeAlert = (id) => {
     setAlerts((prev) =>
       prev.map((a) =>
         a.id === id ? { ...a, acknowledged: true, acknowledgedBy: auth.role } : a
@@ -163,7 +156,7 @@ export default function Dashboard({ auth, onLogout }: Props) {
     );
   };
 
-  const handleClearAlert = (id: string) => {
+  const handleClearAlert = (id) => {
     setAlerts((prev) => prev.filter((a) => a.id !== id));
   };
 

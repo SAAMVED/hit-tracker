@@ -106,8 +106,8 @@ describe("KalmanFilter1D", () => {
   it("substantially reduces variance of noisy static sensor measurements", () => {
     const kf = new KalmanFilter1D({ q: 0.02, r: 0.8 });
     const trueAltitude = 10.5;
-    const rawErrors: number[] = [];
-    const filteredErrors: number[] = [];
+    const rawErrors = [];
+    const filteredErrors = [];
 
     // Simulate 50 noisy measurements around 10.5 m with alternating noise ±1.2m
     for (let i = 0; i < 50; i++) {

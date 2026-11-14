@@ -1,12 +1,11 @@
-import express, { Request, Response, NextFunction } from "express";
+import express from "express";
 import path from "path";
 import { fileURLToPath } from "url";
 import { loginHandler } from "./auth.js";
-import type { Database } from "better-sqlite3";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-export function createApp(db: Database) {
+export function createApp(db) {
   const app = express();
 
   // ── Middleware ───────────────────────────────────────────────────────────────
@@ -16,7 +15,7 @@ export function createApp(db: Database) {
   app.use("/samples", express.static(path.resolve(__dirname, "../samples")));
 
   // Basic CORS for local dev (client on :5173, server on :3000)
-  app.use((_req: Request, res: Response, next: NextFunction) => {
+  app.use((_req, res, next) => {
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
@@ -26,7 +25,7 @@ export function createApp(db: Database) {
 
   // ── Routes ───────────────────────────────────────────────────────────────────
 
-  app.get("/api/health", (_req: Request, res: Response) => {
+  app.get("/api/health", (_req, res) => {
     res.json({
       status: "ok",
       timestamp: Date.now(),
@@ -34,12 +33,12 @@ export function createApp(db: Database) {
     });
   });
 
-  app.post("/api/login", (req: Request, res: Response) => {
+  app.post("/api/login", (req, res) => {
     loginHandler(req, res, db);
   });
 
   // 404 fallback
-  app.use((_req: Request, res: Response) => {
+  app.use((_req, res) => {
     res.status(404).json({ error: "Not found" });
   });
 

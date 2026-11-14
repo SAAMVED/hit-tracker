@@ -29,13 +29,7 @@ const STAIR_X_MAX = 16.5;
 const STAIR_Z_MIN = 8.5;
 const STAIR_Z_MAX = 11.5;
 
-interface FloorDef {
-  label: string;
-  floorIndex: number; // -2..5
-  name: string;
-}
-
-const FLOORS: FloorDef[] = [
+const FLOORS = [
   { label: "B2", floorIndex: -2, name: "Basement Level 2 (Secure Bunker)" },
   { label: "B1", floorIndex: -1, name: "Basement Level 1 (Armoury & Logistics)" },
   { label: "G",  floorIndex:  0, name: "Ground Floor (Entry & Lobby)" },
@@ -48,26 +42,11 @@ const FLOORS: FloorDef[] = [
 
 // ─── Box Geometry Builder ─────────────────────────────────────────────────────
 
-interface BoxSpec {
-  minX: number;
-  minY: number;
-  minZ: number;
-  maxX: number;
-  maxY: number;
-  maxZ: number;
-}
-
-interface MeshData {
-  positions: number[];
-  normals: number[];
-  indices: number[];
-}
-
-function createMeshData(): MeshData {
+function createMeshData() {
   return { positions: [], normals: [], indices: [] };
 }
 
-function appendBox(mesh: MeshData, box: BoxSpec): void {
+function appendBox(mesh, box) {
   const { minX, minY, minZ, maxX, maxY, maxZ } = box;
   const startIndex = mesh.positions.length / 3;
 
@@ -115,7 +94,7 @@ function appendBox(mesh: MeshData, box: BoxSpec): void {
 
 // ─── Build Floors ─────────────────────────────────────────────────────────────
 
-export async function generateSampleBuilding(): Promise<Uint8Array> {
+export async function generateSampleBuilding() {
   const doc = new Document();
   const buffer = doc.createBuffer();
   const scene = doc.createScene("BuildingScene");
@@ -381,13 +360,7 @@ export async function generateSampleBuilding(): Promise<Uint8Array> {
   return io.writeBinary(doc);
 }
 
-function attachPrimitive(
-  doc: Document,
-  buffer: ReturnType<Document["createBuffer"]>,
-  mesh: ReturnType<Document["createMesh"]>,
-  data: MeshData,
-  material: ReturnType<Document["createMaterial"]>
-): void {
+function attachPrimitive(doc, buffer, mesh, data, material) {
   if (data.positions.length === 0) return;
 
   const posAccessor = doc

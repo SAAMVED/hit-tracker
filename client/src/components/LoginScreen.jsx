@@ -1,17 +1,12 @@
-import { useState, FormEvent } from "react";
-import type { AuthState } from "../App.tsx";
+import { useState } from "react";
 
-interface Props {
-  onLogin: (auth: AuthState) => void;
-}
-
-export default function LoginScreen({ onLogin }: Props) {
+export default function LoginScreen({ onLogin }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
 
-  async function handleSubmit(e: FormEvent) {
+  async function handleSubmit(e) {
     e.preventDefault();
     setError(null);
     setLoading(true);
@@ -24,12 +19,12 @@ export default function LoginScreen({ onLogin }: Props) {
       });
 
       if (!res.ok) {
-        const data = await res.json().catch(() => ({})) as { error?: string };
+        const data = await res.json().catch(() => ({}));
         setError(data.error ?? "Login failed");
         return;
       }
 
-      const data = await res.json() as { token: string; role: "commander" | "viewer" };
+      const data = await res.json();
       onLogin({ token: data.token, role: data.role });
     } catch {
       setError("Cannot reach server – check network connection");

@@ -1,4 +1,4 @@
-import BetterSqlite3, { type Database } from "better-sqlite3";
+import BetterSqlite3 from "better-sqlite3";
 import bcrypt from "bcryptjs";
 import path from "path";
 import fs from "fs";
@@ -8,7 +8,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DB_DIR = path.resolve(__dirname, "../../db");
 const DB_PATH = path.join(DB_DIR, "hit-tracker.sqlite");
 
-export function createDatabase(): Database {
+export function createDatabase() {
   fs.mkdirSync(DB_DIR, { recursive: true });
   const db = new BetterSqlite3(DB_PATH);
 
@@ -65,8 +65,8 @@ export function createDatabase(): Database {
   return db;
 }
 
-export function seedUsers(db: Database): void {
-  const existing = db.prepare("SELECT COUNT(*) as cnt FROM users").get() as { cnt: number };
+export function seedUsers(db) {
+  const existing = db.prepare("SELECT COUNT(*) as cnt FROM users").get();
   if (existing.cnt > 0) return;
 
   const commanderPwd = process.env.COMMANDER_PASSWORD ?? "Commander@NSG1";
@@ -82,5 +82,3 @@ export function seedUsers(db: Database): void {
 
   console.log("[db] Seeded default users: commander, viewer");
 }
-
-export type { Database };

@@ -3,14 +3,14 @@
  * 100% offline — zero audio files, zero CDNs, pure browser oscillator synthesis.
  */
 
-let sharedAudioCtx: AudioContext | null = null;
+let sharedAudioCtx = null;
 
-function getAudioContext(): AudioContext | null {
+function getAudioContext() {
   if (typeof window === "undefined") return null;
   if (!sharedAudioCtx) {
     const AudioCtxClass =
       window.AudioContext ||
-      (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      window.webkitAudioContext;
     if (AudioCtxClass) {
       sharedAudioCtx = new AudioCtxClass();
     }
@@ -24,7 +24,7 @@ function getAudioContext(): AudioContext | null {
 /**
  * Emits a high-priority two-tone tactical chirp for critical alerts (e.g. SIGNAL LOST).
  */
-export function playCriticalAlertBeep(): void {
+export function playCriticalAlertBeep() {
   try {
     const ctx = getAudioContext();
     if (!ctx) return;

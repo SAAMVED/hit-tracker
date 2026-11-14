@@ -1,24 +1,13 @@
-import type { Alert, FloorLabel } from "./schemas.js";
-
 /** Threshold in milliseconds before a soldier is marked as having lost signal (10 seconds) */
 export const SIGNAL_LOST_TIMEOUT_MS = 10_000;
 
 /** Battery percentage threshold below which a warning is triggered (< 20%) */
 export const LOW_BATTERY_THRESHOLD_PCT = 20;
 
-/** Minimal representation of soldier state required for alert evaluations */
-export interface SoldierAlertInput {
-  soldierId: string;
-  teamId: string;
-  batteryPct: number;
-  lastSeenAt: number;
-  floor: FloorLabel;
-}
-
 /**
  * Generate a v4-compliant UUID without external libraries.
  */
-export function generateAlertId(): string {
+export function generateAlertId() {
   // Use crypto.randomUUID if available (Node 19+ and modern browsers)
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
     return crypto.randomUUID();
@@ -37,11 +26,7 @@ export function generateAlertId(): string {
  * @param nowMs Current time in epoch milliseconds (defaults to Date.now())
  * @param timeoutMs Timeout in ms before declaring signal lost (default 10,000 ms)
  */
-export function checkSignalLost(
-  soldier: SoldierAlertInput,
-  nowMs: number = Date.now(),
-  timeoutMs: number = SIGNAL_LOST_TIMEOUT_MS
-): Alert | null {
+export function checkSignalLost(soldier, nowMs = Date.now(), timeoutMs = SIGNAL_LOST_TIMEOUT_MS) {
   const elapsedMs = nowMs - soldier.lastSeenAt;
   if (elapsedMs > timeoutMs) {
     const elapsedSec = Math.round(elapsedMs / 1000);
@@ -66,12 +51,12 @@ export function checkSignalLost(
  * @param thresholdPct Battery threshold (default 20%)
  * @param nowMs Current time in epoch milliseconds (defaults to Date.now())
  */
-export function checkLowBattery(
-  soldier: SoldierAlertInput,
-  thresholdPct: number = LOW_BATTERY_THRESHOLD_PCT,
-  nowMs: number = Date.now()
-): Alert | null {
-  if (soldier.batteryPct < thresholdPct) {
+export function checkLowBattery(soldier, thresholdPct = LOW_BATTERY_THRESHOLD_PCT, nowMs = Date.now()) {
+  if (
+    typeof soldier.batteryPct === "number" &&
+    !Number.isNaN(soldier.batteryPct) &&
+    soldier.batteryPct < thresholdPct
+  ) {
     return {
       id: generateAlertId(),
       type: "battery_low",
@@ -93,11 +78,7 @@ export function checkLowBattery(
  * @param previousFloor Previous floor label (null if first reading)
  * @param nowMs Current time in epoch milliseconds (defaults to Date.now())
  */
-export function checkFloorTransition(
-  soldier: SoldierAlertInput,
-  previousFloor: FloorLabel | null | undefined,
-  nowMs: number = Date.now()
-): Alert | null {
+export function checkFloorTransition(soldier, previousFloor, nowMs = Date.now()) {
   if (previousFloor && previousFloor !== soldier.floor) {
     return {
       id: generateAlertId(),
@@ -120,12 +101,8 @@ export function checkFloorTransition(
  * @param previousFloor Previous floor label (or null if initial)
  * @param nowMs Current time in ms
  */
-export function evaluateSoldierAlerts(
-  current: SoldierAlertInput,
-  previousFloor: FloorLabel | null | undefined,
-  nowMs: number = Date.now()
-): Alert[] {
-  const alerts: Alert[] = [];
+export function evaluateSoldierAlerts(current, previousFloor, nowMs = Date.now()) {
+  const alerts = [];
 
   const floorAlert = checkFloorTransition(current, previousFloor, nowMs);
   if (floorAlert) alerts.push(floorAlert);
@@ -141,24 +118,24 @@ export function evaluateSoldierAlerts(
  * prevents duplicate spam of active alerts, and manages acknowledgments.
  */
 export class AlertsEngine {
-  private activeAlerts: Map<string, Alert> = new Map();
-  private previousFloors: Map<string, FloorLabel> = new Map();
-  private knownSoldiers: Map<string, SoldierAlertInput> = new Map();
+  #activeAlerts = new Map();
+  #previousFloors = new Map();
+  #knownSoldiers = new Map();
 
   /**
    * Process incoming soldier update.
    */
-  public processTelemetry(soldier: SoldierAlertInput, nowMs: number = Date.now()): Alert[] {
-    const prevFloor = this.previousFloors.get(soldier.soldierId);
-    this.knownSoldiers.set(soldier.soldierId, soldier);
-    this.previousFloors.set(soldier.soldierId, soldier.floor);
+  processTelemetry(soldier, nowMs = Date.now()) {
+    const prevFloor = this.#previousFloors.get(soldier.soldierId);
+    this.#knownSoldiers.set(soldier.soldierId, soldier);
+    this.#previousFloors.set(soldier.soldierId, soldier.floor);
 
-    const newAlerts: Alert[] = [];
+    const newAlerts = [];
 
     // If signal was lost previously, clear the signal_lost alert
     const signalLostKey = `${soldier.soldierId}:signal_lost`;
-    if (this.activeAlerts.has(signalLostKey)) {
-      this.activeAlerts.delete(signalLostKey);
+    if (this.#activeAlerts.has(signalLostKey)) {
+      this.#activeAlerts.delete(signalLostKey);
     }
 
     // 1. Floor transition check
@@ -166,22 +143,22 @@ export class AlertsEngine {
     if (floorAlert) {
       newAlerts.push(floorAlert);
       // Floor transitions are informational events, stored with unique timestamp keys
-      this.activeAlerts.set(`${soldier.soldierId}:floor_transition:${nowMs}`, floorAlert);
+      this.#activeAlerts.set(`${soldier.soldierId}:floor_transition:${nowMs}`, floorAlert);
     }
 
     // 2. Battery check
     const batteryKey = `${soldier.soldierId}:battery_low`;
     if (soldier.batteryPct < LOW_BATTERY_THRESHOLD_PCT) {
-      if (!this.activeAlerts.has(batteryKey)) {
+      if (!this.#activeAlerts.has(batteryKey)) {
         const alert = checkLowBattery(soldier, LOW_BATTERY_THRESHOLD_PCT, nowMs);
         if (alert) {
-          this.activeAlerts.set(batteryKey, alert);
+          this.#activeAlerts.set(batteryKey, alert);
           newAlerts.push(alert);
         }
       }
     } else {
       // Cleared / recharged
-      this.activeAlerts.delete(batteryKey);
+      this.#activeAlerts.delete(batteryKey);
     }
 
     return newAlerts;
@@ -191,37 +168,37 @@ export class AlertsEngine {
    * Scan all known soldiers for signal timeout (> 10s).
    * Call periodically (e.g. every second).
    */
-  public checkStaleSoldiers(nowMs: number = Date.now()): Alert[] {
-    const newAlerts: Alert[] = [];
+  checkStaleSoldiers(nowMs = Date.now()) {
+    const newAlerts = [];
 
-    for (const [soldierId, soldier] of this.knownSoldiers.entries()) {
+    for (const [soldierId, soldier] of this.#knownSoldiers.entries()) {
       const key = `${soldierId}:signal_lost`;
       const elapsed = nowMs - soldier.lastSeenAt;
 
       if (elapsed > SIGNAL_LOST_TIMEOUT_MS) {
-        if (!this.activeAlerts.has(key)) {
+        if (!this.#activeAlerts.has(key)) {
           const alert = checkSignalLost(soldier, nowMs, SIGNAL_LOST_TIMEOUT_MS);
           if (alert) {
-            this.activeAlerts.set(key, alert);
+            this.#activeAlerts.set(key, alert);
             newAlerts.push(alert);
           }
         }
       } else {
-        this.activeAlerts.delete(key);
+        this.#activeAlerts.delete(key);
       }
     }
 
     return newAlerts;
   }
 
-  public getActiveAlerts(): Alert[] {
-    return Array.from(this.activeAlerts.values()).sort(
+  getActiveAlerts() {
+    return Array.from(this.#activeAlerts.values()).sort(
       (a, b) => b.timestamp - a.timestamp
     );
   }
 
-  public acknowledgeAlert(id: string, by: string = "commander", nowMs: number = Date.now()): boolean {
-    for (const alert of this.activeAlerts.values()) {
+  acknowledgeAlert(id, by = "commander", nowMs = Date.now()) {
+    for (const alert of this.#activeAlerts.values()) {
       if (alert.id === id) {
         alert.acknowledged = true;
         alert.acknowledgedBy = by;
@@ -232,10 +209,10 @@ export class AlertsEngine {
     return false;
   }
 
-  public clearAlert(id: string): boolean {
-    for (const [key, alert] of this.activeAlerts.entries()) {
+  clearAlert(id) {
+    for (const [key, alert] of this.#activeAlerts.entries()) {
       if (alert.id === id) {
-        this.activeAlerts.delete(key);
+        this.#activeAlerts.delete(key);
         return true;
       }
     }

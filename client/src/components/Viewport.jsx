@@ -2,21 +2,9 @@ import { useMemo, useEffect } from "react";
 import { Canvas } from "@react-three/fiber";
 import { OrbitControls, Grid, useGLTF, Html } from "@react-three/drei";
 import * as THREE from "three";
-import { floorLabelToNumber, type FloorLabel } from "@hit-tracker/shared";
-import type { SoldierStateDisplay } from "./Roster.tsx";
+import { floorLabelToNumber } from "@hit-tracker/shared";
 
-export type FloorMode = "ghost" | "cutaway" | "isolated";
-
-interface Props {
-  floor: number;
-  floorMode: FloorMode;
-  onFloorModeChange: (mode: FloorMode) => void;
-  soldiers: Record<string, SoldierStateDisplay>;
-  trails: Record<string, [number, number, number][]>;
-  selectedSoldierId?: string | null;
-}
-
-const TEAM_COLORS: Record<string, string> = {
+const TEAM_COLORS = {
   Alpha: "#ef4444",   // Red
   Bravo: "#3b82f6",   // Blue
   Charlie: "#eab308", // Yellow
@@ -29,9 +17,6 @@ const TEAM_COLORS: Record<string, string> = {
 function BuildingModel({
   activeFloor,
   floorMode,
-}: {
-  activeFloor: number;
-  floorMode: FloorMode;
 }) {
   const { scene } = useGLTF("/models/sample-building.glb");
   const clonedScene = useMemo(() => scene.clone(true), [scene]);
@@ -39,13 +24,13 @@ function BuildingModel({
   useEffect(() => {
     clonedScene.traverse((obj) => {
       // Find floor membership from node name (e.g. Floor_B2, Floor_G, Floor_1..5)
-      let current: THREE.Object3D | null = obj;
-      let nodeFloor: number | null = null;
+      let current = obj;
+      let nodeFloor = null;
 
       while (current && current !== clonedScene) {
         const match = current.name.match(/Floor_(B2|B1|G|[1-5])/);
         if (match) {
-          nodeFloor = floorLabelToNumber(match[1] as FloorLabel);
+          nodeFloor = floorLabelToNumber(match[1]);
           break;
         }
         current = current.parent;
@@ -74,7 +59,7 @@ function BuildingModel({
   return <primitive object={clonedScene} />;
 }
 
-function configureMaterial(material: THREE.Material, isTarget: boolean) {
+function configureMaterial(material, isTarget) {
   material.transparent = true;
   material.depthWrite = isTarget;
   material.opacity = isTarget ? 0.95 : 0.12;
@@ -88,11 +73,6 @@ function SoldierMarker({
   activeFloor,
   floorMode,
   isSelected,
-}: {
-  soldier: SoldierStateDisplay;
-  activeFloor: number;
-  floorMode: FloorMode;
-  isSelected?: boolean;
 }) {
   const soldierFloorNum = floorLabelToNumber(soldier.estimatedFloor);
 
@@ -105,7 +85,7 @@ function SoldierMarker({
   }
 
   const teamColor = TEAM_COLORS[soldier.teamId] ?? "#10b981";
-  const pos: [number, number, number] = [
+  const pos = [
     soldier.x,
     soldier.altitude + 0.4,
     soldier.y,
@@ -159,14 +139,11 @@ function SoldierMarker({
 function MovementTrail({
   points,
   color,
-}: {
-  points: [number, number, number][];
-  color: string;
 }) {
   const lineObject = useMemo(() => {
     if (points.length < 2) return null;
     const geom = new THREE.BufferGeometry();
-    const flatPoints: number[] = [];
+    const flatPoints = [];
     for (const p of points) {
       flatPoints.push(p[0], p[1] + 0.1, p[2]);
     }
@@ -195,7 +172,7 @@ export default function Viewport({
   soldiers,
   trails,
   selectedSoldierId,
-}: Props) {
+}) {
   const soldiersList = useMemo(() => Object.values(soldiers), [soldiers]);
 
   return (
@@ -211,7 +188,7 @@ export default function Viewport({
           <span className="text-gray-500 text-[10px] uppercase font-bold px-1.5">
             Mode:
           </span>
-          {(["ghost", "cutaway", "isolated"] as const).map((mode) => (
+          {["ghost", "cutaway", "isolated"].map((mode) => (
             <button
               key={mode}
               onClick={() => onFloorModeChange(mode)}
@@ -313,7 +290,7 @@ export default function Viewport({
   );
 }
 
-function floorTitle(floor: number): string {
+function floorTitle(floor) {
   if (floor === 0) return "Ground Floor (G)";
   if (floor < 0) return `Basement Level ${Math.abs(floor)} (B${Math.abs(floor)})`;
   return `Floor ${floor}`;

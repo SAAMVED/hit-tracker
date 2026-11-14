@@ -1,12 +1,4 @@
-import type { Alert } from "@hit-tracker/shared";
-
-interface Props {
-  alerts: Alert[];
-  onAcknowledge: (id: string) => void;
-  onClear: (id: string) => void;
-}
-
-export default function AlertsPanel({ alerts, onAcknowledge, onClear }: Props) {
+export default function AlertsPanel({ alerts, onAcknowledge, onClear }) {
   if (alerts.length === 0) return null;
 
   return (

@@ -3,7 +3,6 @@ import { z } from "zod";
 // ─── Floor Labels ─────────────────────────────────────────────────────────────
 
 export const FloorLabelSchema = z.enum(["B2", "B1", "G", "1", "2", "3", "4", "5"]);
-export type FloorLabel = z.infer<typeof FloorLabelSchema>;
 
 // ─── Telemetry Packet ────────────────────────────────────────────────────────
 
@@ -36,12 +35,9 @@ export const TelemetryPacketSchema = z.object({
   altitude: z.number().finite().optional(),
 });
 
-export type TelemetryPacket = z.infer<typeof TelemetryPacketSchema>;
-
 // ─── Soldier ─────────────────────────────────────────────────────────────────
 
 export const SoldierStatusSchema = z.enum(["active", "inactive", "casualty", "unknown"]);
-export type SoldierStatus = z.infer<typeof SoldierStatusSchema>;
 
 export const SoldierSchema = z.object({
   id: z.string().min(1).max(16),
@@ -59,12 +55,9 @@ export const SoldierSchema = z.object({
   lastSeenAt: z.number().int().positive().optional(),
 });
 
-export type Soldier = z.infer<typeof SoldierSchema>;
-
 // ─── Team ────────────────────────────────────────────────────────────────────
 
 export const TeamIdSchema = z.enum(["Alpha", "Bravo", "Charlie", "Delta"]);
-export type TeamId = z.infer<typeof TeamIdSchema>;
 
 export const TeamSchema = z.object({
   id: TeamIdSchema,
@@ -76,12 +69,9 @@ export const TeamSchema = z.object({
   leaderId: z.string().optional(),
 });
 
-export type Team = z.infer<typeof TeamSchema>;
-
 // ─── Alert ───────────────────────────────────────────────────────────────────
 
 export const AlertSeveritySchema = z.enum(["info", "warning", "critical"]);
-export type AlertSeverity = z.infer<typeof AlertSeveritySchema>;
 
 export const AlertTypeSchema = z.enum([
   "battery_low",
@@ -91,7 +81,6 @@ export const AlertTypeSchema = z.enum([
   "out_of_bounds",
   "custom",
 ]);
-export type AlertType = z.infer<typeof AlertTypeSchema>;
 
 export const AlertSchema = z.object({
   id: z.string().uuid(),
@@ -105,8 +94,6 @@ export const AlertSchema = z.object({
   acknowledgedBy: z.string().optional(),
   acknowledgedAt: z.number().int().positive().optional(),
 });
-
-export type Alert = z.infer<typeof AlertSchema>;
 
 // ─── Soldier Live State (Broadcast format) ───────────────────────────────────
 
@@ -122,7 +109,6 @@ export const SoldierLiveStateSchema = z.object({
   seq: z.number().int().nonnegative().optional(),
   signal: z.number().optional(),
 });
-export type SoldierLiveState = z.infer<typeof SoldierLiveStateSchema>;
 
 // ─── WebSocket Messages ───────────────────────────────────────────────────────
 
@@ -131,7 +117,6 @@ export const IngestMessageSchema = z.object({
   type: z.literal("telemetry"),
   payload: TelemetryPacketSchema,
 });
-export type IngestMessage = z.infer<typeof IngestMessageSchema>;
 
 /** Message sent from server → dashboard clients */
 export const DashboardMessageSchema = z.discriminatedUnion("type", [
@@ -167,25 +152,21 @@ export const DashboardMessageSchema = z.discriminatedUnion("type", [
     payload: z.object({ serverTime: z.number() }),
   }),
 ]);
-export type DashboardMessage = z.infer<typeof DashboardMessageSchema>;
 
 // ─── Auth ─────────────────────────────────────────────────────────────────────
 
 export const UserRoleSchema = z.enum(["commander", "viewer"]);
-export type UserRole = z.infer<typeof UserRoleSchema>;
 
 export const LoginRequestSchema = z.object({
   username: z.string().min(1).max(64),
   password: z.string().min(1).max(128),
 });
-export type LoginRequest = z.infer<typeof LoginRequestSchema>;
 
 export const LoginResponseSchema = z.object({
   token: z.string(),
   role: UserRoleSchema,
   expiresAt: z.number().int().positive(),
 });
-export type LoginResponse = z.infer<typeof LoginResponseSchema>;
 
 // ─── Floor Estimation ────────────────────────────────────────────────────────
 

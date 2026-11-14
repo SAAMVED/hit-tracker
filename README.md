@@ -8,7 +8,7 @@ A Task Force Commander at the Integrated Command Post (ICP) tracks House Interve
 
 ```
 monorepo (npm workspaces)
-├── shared/      – Zod schemas, TypeScript types, barometric estimation, Vitest tests
+├── shared/      – Zod schemas, barometric estimation, Vitest tests
 ├── server/      – Node 20 + Express + SQLite + WebSocket gateway + JWT auth
 ├── client/      – React + Vite + Tailwind + @react-three/fiber + drei
 ├── simulator/   – 16-soldier, 4-team telemetry simulator (1 Hz)
@@ -38,7 +38,7 @@ npm start
 |---|---|
 | `npm run build` | Build all workspaces |
 | `npm test` | Run Vitest tests in shared/ |
-| `npm run typecheck` | TypeScript check across all workspaces |
+| `npm run typecheck` | Typecheck placeholder across all workspaces |
 | `npm start` | Start server + client dev + simulator concurrently |
 | `npm run start:prod` | Start server in production mode |
 | `npm run generate:models` | Generate 3D model assets (placeholder) |

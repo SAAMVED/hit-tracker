@@ -3,21 +3,7 @@
  * Each soldier has a starting position and floor assignment.
  */
 
-import type { TeamId } from "@hit-tracker/shared";
-
-export interface SoldierDef {
-  id: string;
-  name: string;
-  teamId: TeamId;
-  /** Starting X position (metres) */
-  startX: number;
-  /** Starting Y position (metres) */
-  startY: number;
-  /** Starting floor (0 = ground, negative = basement) */
-  startFloor: number;
-}
-
-export const SOLDIERS: SoldierDef[] = [
+export const SOLDIERS = [
   // ── Alpha Team ─────────────────────────────────────────────────────────────
   { id: "A1", name: "Naik Arjun Singh",      teamId: "Alpha", startX:  2, startY:  2, startFloor: 1  },
   { id: "A2", name: "Sepoy Rahul Yadav",     teamId: "Alpha", startX:  3, startY:  3, startFloor: 1  },

@@ -2,9 +2,7 @@ import {
   FLOOR_HEIGHT_M,
   SEA_LEVEL_HPA,
   altitudeToPressure,
-  type TelemetryPacket,
 } from "@hit-tracker/shared";
-import type { SoldierDef } from "./soldiers.js";
 
 /** Minimum and maximum allowable floor indices in the simulation */
 const MIN_FLOOR = -2; // B2
@@ -21,43 +19,14 @@ const BUILDING_BOUNDS = {
 /** Central stairwell location on the building grid (metres) */
 const STAIRWELL_LOCATION = { x: 15.0, y: 10.0 };
 
-/** Stair transition state during vertical movement */
-export interface StairTransition {
-  fromFloor: number;
-  toFloor: number;
-  startAltitudeM: number;
-  targetAltitudeM: number;
-  /** Vertical climb speed in metres per second (realistic: 0.7 - 1.1 m/s) */
-  climbSpeedMPerSec: number;
-}
-
-/** Mutable runtime state for one soldier */
-export interface SoldierState {
-  def: SoldierDef;
-  x: number;
-  y: number;
-  /** Continuous altitude above ground in metres */
-  altitudeM: number;
-  /** Current integer floor (-2..5) */
-  floor: number;
-  /** Active stairwell transition, or null if patrolling */
-  stairTransition: StairTransition | null;
-  seq: number;
-  battery: number;
-
-  // Demo alert simulation state
-  nextCommLossMs?: number;
-  commLossUntilMs?: number;
-}
-
-export function initialState(def: SoldierDef): SoldierState {
+export function initialState(def) {
   const startAltitudeM = def.startFloor * FLOOR_HEIGHT_M;
 
   // Demo alert: Soldier B2 starts with a lower battery (23%) to demonstrate LOW BATTERY alert
   const initialBattery =
     def.id === "B2" ? 23 : 85 + Math.floor(Math.random() * 15);
 
-  const state: SoldierState = {
+  const state = {
     def,
     x: def.startX,
     y: def.startY,
@@ -77,13 +46,13 @@ export function initialState(def: SoldierDef): SoldierState {
 }
 
 /** Random walk bounded inside building footprint */
-function randomWalk(value: number, min: number, max: number, step = 0.5): number {
+function randomWalk(value, min, max, step = 0.5) {
   const delta = (Math.random() - 0.5) * 2 * step;
   return Math.max(min, Math.min(max, value + delta));
 }
 
 /** Move coordinate smoothly towards a target point */
-function moveTowards(current: number, target: number, maxStep: number): number {
+function moveTowards(current, target, maxStep) {
   const diff = target - current;
   if (Math.abs(diff) <= maxStep) return target;
   return current + Math.sign(diff) * maxStep;
@@ -93,7 +62,7 @@ function moveTowards(current: number, target: number, maxStep: number): number {
  * Advance the soldier's simulation state by 1 second (1 Hz tick).
  * Returns null if the soldier is experiencing temporary signal/comm loss (for demo).
  */
-export function tick(state: SoldierState, dtSec = 1.0, nowMs = Date.now()): TelemetryPacket | null {
+export function tick(state, dtSec = 1.0, nowMs = Date.now()) {
   // ── Demo Alert: Signal Drop for Soldier D4 ──────────────────────────────────
   if (state.def.id === "D4") {
     if (state.commLossUntilMs && nowMs < state.commLossUntilMs) {
@@ -110,7 +79,7 @@ export function tick(state: SoldierState, dtSec = 1.0, nowMs = Date.now()): Tele
     }
   }
 
-  // ── Movement & Stair Navigation ────────────────────────────────────────────
+  // ── Movement & Stair Navigation ────────────────────────────────────
   if (state.stairTransition) {
     const trans = state.stairTransition;
     const verticalStep = trans.climbSpeedMPerSec * dtSec;
@@ -182,7 +151,7 @@ export function tick(state: SoldierState, dtSec = 1.0, nowMs = Date.now()): Tele
   const theoreticalPressure = altitudeToPressure(state.altitudeM, SEA_LEVEL_HPA);
   const pressureHpa = theoreticalPressure + sensorNoiseHpa;
 
-  const packet: TelemetryPacket = {
+  const packet = {
     soldierId: state.def.id,
     teamId: state.def.teamId,
     seq: state.seq++,

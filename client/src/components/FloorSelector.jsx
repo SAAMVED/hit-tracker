@@ -1,16 +1,9 @@
-interface Props {
-  floors: number[];
-  activeFloor: number;
-  onSelect: (floor: number) => void;
-  unitCounts?: Record<number, number>;
-}
-
 export default function FloorSelector({
   floors,
   activeFloor,
   onSelect,
   unitCounts = {},
-}: Props) {
+}) {
   return (
     <div className="flex flex-col items-center gap-2 w-full px-1">
       <div className="text-[10px] text-gray-500 uppercase tracking-widest text-center font-bold mb-1">
@@ -50,13 +43,13 @@ export default function FloorSelector({
   );
 }
 
-function floorLabel(floor: number): string {
+function floorLabel(floor) {
   if (floor === 0) return "G";
   if (floor < 0) return `B${Math.abs(floor)}`;
   return `${floor}`;
 }
 
-function floorTitle(floor: number): string {
+function floorTitle(floor) {
   if (floor === 0) return "Ground Floor";
   if (floor < 0) return `Basement ${Math.abs(floor)}`;
   return `Floor ${floor}`;

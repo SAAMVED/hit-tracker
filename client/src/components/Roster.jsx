@@ -1,17 +1,3 @@
-import type { Alert, FloorLabel } from "@hit-tracker/shared";
-
-export interface SoldierStateDisplay {
-  soldierId: string;
-  teamId: string;
-  x: number;
-  y: number;
-  altitude: number;
-  estimatedFloor: FloorLabel;
-  batteryPct: number;
-  timestamp: number;
-  signal?: number;
-}
-
 const TEAMS = [
   {
     id: "Alpha",
@@ -63,16 +49,9 @@ const TEAMS = [
   },
 ];
 
-interface Props {
-  role: "commander" | "viewer";
-  soldiers: Record<string, SoldierStateDisplay>;
-  alerts: Alert[];
-  onSelectSoldier?: (soldierId: string) => void;
-}
-
-export default function Roster({ role, soldiers, alerts, onSelectSoldier }: Props) {
+export default function Roster({ role, soldiers, alerts, onSelectSoldier }) {
   // Find active alerts for each soldier
-  const soldierAlertMap = new Map<string, Alert>();
+  const soldierAlertMap = new Map();
   for (const alert of alerts) {
     if (!alert.acknowledged) {
       // Prioritize critical over warning

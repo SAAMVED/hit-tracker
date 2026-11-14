@@ -5,7 +5,7 @@
  * telemetry packets for 16 soldiers at 1 Hz.
  *
  * Usage:
- *   SERVER_URL=ws://localhost:3000 tsx src/index.ts
+ *   SERVER_URL=ws://localhost:3000 node src/index.js
  */
 
 import { WebSocket } from "ws";
@@ -18,9 +18,9 @@ const TICK_MS = parseInt(process.env.TICK_MS ?? "1000", 10);
 
 const states = SOLDIERS.map(initialState);
 
-let ws: WebSocket | null = null;
-let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-let tickInterval: ReturnType<typeof setInterval> | null = null;
+let ws = null;
+let reconnectTimer = null;
+let tickInterval = null;
 
 function connect() {
   console.log(`[simulator] Connecting to ${INGEST_URL}`);

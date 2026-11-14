@@ -1,44 +1,28 @@
 import { WebSocketServer, WebSocket } from "ws";
-import type { IncomingMessage, Server } from "http";
-import type { Database } from "better-sqlite3";
 import {
   AlertsEngine,
   FloorEstimator,
   IngestMessageSchema,
-  type FloorLabel,
-  type TelemetryPacket,
 } from "@hit-tracker/shared";
 import { verifyToken } from "./auth.js";
 
 /** Dashboard client set – receives broadcast updates */
-const dashboardClients = new Set<WebSocket>();
+const dashboardClients = new Set();
 
 /** Per-soldier barometric floor estimators with Kalman filtering and hysteresis */
-const soldierEstimators = new Map<string, FloorEstimator>();
+const soldierEstimators = new Map();
 
 /** Centralized alerts engine */
 const alertsEngine = new AlertsEngine();
 
 /** Cache of the latest live state for each soldier to serve snapshots */
-export interface SoldierLiveSnapshot {
-  soldierId: string;
-  teamId: string;
-  x: number;
-  y: number;
-  altitude: number;
-  estimatedFloor: FloorLabel;
-  batteryPct: number;
-  timestamp: number;
-  signal?: number;
-  seq?: number;
-}
-const latestSoldierStates = new Map<string, SoldierLiveSnapshot>();
+const latestSoldierStates = new Map();
 
 /**
  * Retrieves or initializes a FloorEstimator for a soldier.
  * P0 reference pressure is taken from that soldier's very first reading.
  */
-function getOrCreateEstimator(soldierId: string, initialPressureHpa: number): FloorEstimator {
+function getOrCreateEstimator(soldierId, initialPressureHpa) {
   let estimator = soldierEstimators.get(soldierId);
   if (!estimator) {
     estimator = new FloorEstimator({
@@ -52,7 +36,7 @@ function getOrCreateEstimator(soldierId: string, initialPressureHpa: number): Fl
   return estimator;
 }
 
-export function createWebSocketGateway(httpServer: Server, db: Database) {
+export function createWebSocketGateway(httpServer, db) {
   // ── Ingest gateway (devices / simulator → server) ─────────────────────────
   const ingestWss = new WebSocketServer({ noServer: true });
 
@@ -60,7 +44,7 @@ export function createWebSocketGateway(httpServer: Server, db: Database) {
   const dashboardWss = new WebSocketServer({ noServer: true });
 
   // Route upgrade requests to the correct WSS based on path
-  httpServer.on("upgrade", (req: IncomingMessage, socket, head) => {
+  httpServer.on("upgrade", (req, socket, head) => {
     const url = req.url ?? "/";
 
     if (url.startsWith("/ws/ingest")) {
@@ -112,11 +96,11 @@ export function createWebSocketGateway(httpServer: Server, db: Database) {
   }, 1000);
 
   // ── Ingest connection handler ──────────────────────────────────────────────
-  ingestWss.on("connection", (ws: WebSocket) => {
+  ingestWss.on("connection", (ws) => {
     console.log("[gateway] Simulator/device connected to /ws/ingest");
 
     ws.on("message", (data) => {
-      let raw: unknown;
+      let raw;
       try {
         raw = JSON.parse(data.toString());
       } catch {
@@ -135,7 +119,7 @@ export function createWebSocketGateway(httpServer: Server, db: Database) {
       const estimation = estimator.update(pkt.pressureHpa, pkt.timestamp);
 
       // Construct live soldier state
-      const soldierState: SoldierLiveSnapshot = {
+      const soldierState = {
         soldierId: pkt.soldierId,
         teamId: pkt.teamId,
         x: pkt.x,
@@ -187,7 +171,7 @@ export function createWebSocketGateway(httpServer: Server, db: Database) {
   });
 
   // ── Dashboard connection handler ───────────────────────────────────────────
-  dashboardWss.on("connection", (ws: WebSocket) => {
+  dashboardWss.on("connection", (ws) => {
     console.log(`[gateway] Dashboard client connected (${dashboardClients.size + 1} active)`);
     dashboardClients.add(ws);
 
@@ -233,7 +217,7 @@ export function createWebSocketGateway(httpServer: Server, db: Database) {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function storeTelemetry(db: Database, pkt: TelemetryPacket) {
+function storeTelemetry(db, pkt) {
   try {
     db.prepare(`
       INSERT INTO telemetry
@@ -256,14 +240,14 @@ function storeTelemetry(db: Database, pkt: TelemetryPacket) {
   }
 }
 
-function broadcastToDashboard(msg: object) {
+function broadcastToDashboard(msg) {
   const text = JSON.stringify(msg);
   for (const client of dashboardClients) {
     safeSend(client, msg, text);
   }
 }
 
-function safeSend(ws: WebSocket, msg: object, cached?: string) {
+function safeSend(ws, msg, cached) {
   if (ws.readyState === WebSocket.OPEN) {
     ws.send(cached ?? JSON.stringify(msg));
   }

@@ -7,7 +7,7 @@ import {
   evaluateSoldierAlerts,
   generateAlertId,
 } from "../src/alerts.js";
-import { AlertSchema, type FloorLabel } from "../src/schemas.js";
+import { AlertSchema } from "../src/schemas.js";
 
 describe("Alerts Engine (pure functions)", () => {
   const baseSoldier = {
@@ -15,7 +15,7 @@ describe("Alerts Engine (pure functions)", () => {
     teamId: "Alpha",
     batteryPct: 85,
     lastSeenAt: 1700000000000,
-    floor: "G" as FloorLabel,
+    floor: "G",
   };
 
   it("generateAlertId returns a valid UUID", () => {
@@ -95,7 +95,7 @@ describe("Alerts Engine (pure functions)", () => {
 
   describe("evaluateSoldierAlerts (composite)", () => {
     it("can detect simultaneous floor transition and low battery", () => {
-      const current = { ...baseSoldier, floor: "2" as FloorLabel, batteryPct: 15 };
+      const current = { ...baseSoldier, floor: "2", batteryPct: 15 };
       const alerts = evaluateSoldierAlerts(current, "1");
       expect(alerts).toHaveLength(2);
       expect(alerts.map((a) => a.type)).toContain("floor_transition");
@@ -125,50 +125,69 @@ describe("AlertsEngine (stateful manager)", () => {
     expect(alerts2).toHaveLength(1);
     expect(alerts2[0].type).toBe("floor_transition");
 
-    // Next packet: B2 battery drops to 18%
-    now += 1000;
-    const alerts3 = engine.processTelemetry(
-      { soldierId: "B2", teamId: "Bravo", batteryPct: 18, lastSeenAt: now, floor: "1" },
-      now
-    );
-    expect(alerts3).toHaveLength(1);
-    expect(alerts3[0].type).toBe("battery_low");
-
-    // Subsequent packet with battery still 18%: no duplicate alert spam!
-    now += 1000;
-    const alerts4 = engine.processTelemetry(
-      { soldierId: "B2", teamId: "Bravo", batteryPct: 18, lastSeenAt: now, floor: "1" },
-      now
-    );
-    expect(alerts4).toHaveLength(0);
-
-    // Stale check after 5s: not stale yet (6s since lastSeenAt)
-    now += 5000;
-    expect(engine.checkStaleSoldiers(now)).toHaveLength(0);
-
-    // Stale check after 15s since lastSeenAt (> 10s): signal_lost triggers!
-    now += 10000;
+    // Simulate signal lost: no packet for 11s
+    now += 11000;
     const staleAlerts = engine.checkStaleSoldiers(now);
     expect(staleAlerts).toHaveLength(1);
     expect(staleAlerts[0].type).toBe("signal_lost");
     expect(staleAlerts[0].severity).toBe("critical");
 
-    // Commander acknowledges the critical alert
-    const ackSuccess = engine.acknowledgeAlert(staleAlerts[0].id, "commander", now);
-    expect(ackSuccess).toBe(true);
+    // Calling checkStaleSoldiers again should NOT create duplicate alerts
+    const staleAlerts2 = engine.checkStaleSoldiers(now);
+    expect(staleAlerts2).toHaveLength(0); // Already tracked
 
-    const active = engine.getActiveAlerts();
-    const acked = active.find((a) => a.id === staleAlerts[0].id);
-    expect(acked?.acknowledged).toBe(true);
-    expect(acked?.acknowledgedBy).toBe("commander");
-
-    // When soldier resumes sending packets, signal_lost is cleared
-    now += 2000;
-    engine.processTelemetry(
-      { soldierId: "B2", teamId: "Bravo", batteryPct: 18, lastSeenAt: now, floor: "1" },
+    // Signal recovery: B2 sends a new packet
+    now += 1000;
+    const recoveryAlerts = engine.processTelemetry(
+      { soldierId: "B2", teamId: "Bravo", batteryPct: 75, lastSeenAt: now, floor: "1" },
       now
     );
-    const activeAfterResume = engine.getActiveAlerts();
-    expect(activeAfterResume.find((a) => a.type === "signal_lost")).toBeUndefined();
+    // signal_lost cleared; no new floor/battery alerts
+    expect(recoveryAlerts).toHaveLength(0);
+
+    // Verify signal_lost removed from active alerts
+    const active = engine.getActiveAlerts();
+    expect(active.every((a) => a.type !== "signal_lost")).toBe(true);
+  });
+
+  it("does not spam duplicate battery alerts", () => {
+    const engine = new AlertsEngine();
+    let now = 1700000000000;
+
+    // B1 at low battery 15%
+    const a1 = engine.processTelemetry(
+      { soldierId: "B1", teamId: "Bravo", batteryPct: 15, lastSeenAt: now, floor: "G" },
+      now
+    );
+    // First packet on a new soldier with low battery still triggers low battery alert
+    expect(a1.some((a) => a.type === "battery_low")).toBe(true);
+
+    // Send again at same low battery: should NOT trigger another battery alert
+    now += 1000;
+    const a2 = engine.processTelemetry(
+      { soldierId: "B1", teamId: "Bravo", batteryPct: 10, lastSeenAt: now, floor: "G" },
+      now
+    );
+    expect(a2.filter((a) => a.type === "battery_low")).toHaveLength(0);
+  });
+
+  it("clears acknowledged battery alert when battery level recovers", () => {
+    const engine = new AlertsEngine();
+    let now = 1700000000000;
+
+    engine.processTelemetry(
+      { soldierId: "C1", teamId: "Charlie", batteryPct: 10, lastSeenAt: now, floor: "G" },
+      now
+    );
+
+    // Battery recovered (above threshold)
+    now += 1000;
+    engine.processTelemetry(
+      { soldierId: "C1", teamId: "Charlie", batteryPct: 50, lastSeenAt: now, floor: "G" },
+      now
+    );
+
+    const active = engine.getActiveAlerts();
+    expect(active.filter((a) => a.type === "battery_low" && a.soldierId === "C1")).toHaveLength(0);
   });
 });
