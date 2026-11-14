@@ -97,6 +97,15 @@ export const AlertSchema = z.object({
   acknowledgedAt: z.number().int().positive().optional(),
 });
 
+// ─── Reference Station Packet ────────────────────────────────────────────────
+
+export const ReferenceStationPacketSchema = z.object({
+  stationId: z.string().min(1).max(32).default("ICP-BARO-1"),
+  pressureHpa: z.number().positive().max(1100),
+  timestamp: z.number().int().positive(),
+  temperatureC: z.number().optional(),
+});
+
 // ─── Soldier Live State (Broadcast format) ───────────────────────────────────
 
 export const SoldierLiveStateSchema = z.object({
@@ -105,6 +114,8 @@ export const SoldierLiveStateSchema = z.object({
   x: z.number().finite(),
   y: z.number().finite(),
   altitude: z.number().finite().default(0),
+  rawAltitude: z.number().finite().optional(),
+  correctedAltitude: z.number().finite().optional(),
   estimatedFloor: FloorLabelSchema,
   batteryPct: z.number().int().min(0).max(100),
   timestamp: z.number().int().positive(),
@@ -116,10 +127,16 @@ export const SoldierLiveStateSchema = z.object({
 // ─── WebSocket Messages ───────────────────────────────────────────────────────
 
 /** Message sent from simulator / device → server */
-export const IngestMessageSchema = z.object({
-  type: z.literal("telemetry"),
-  payload: TelemetryPacketSchema,
-});
+export const IngestMessageSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("telemetry"),
+    payload: TelemetryPacketSchema,
+  }),
+  z.object({
+    type: z.literal("reference_station"),
+    payload: ReferenceStationPacketSchema,
+  }),
+]);
 
 /** Message sent from server → dashboard clients */
 export const DashboardMessageSchema = z.discriminatedUnion("type", [
@@ -136,6 +153,8 @@ export const DashboardMessageSchema = z.discriminatedUnion("type", [
     x: z.number().optional(),
     y: z.number().optional(),
     altitude: z.number().optional(),
+    rawAltitude: z.number().optional(),
+    correctedAltitude: z.number().optional(),
     estimatedFloor: FloorLabelSchema.optional(),
     batteryPct: z.number().optional(),
     timestamp: z.number().optional(),
@@ -149,6 +168,12 @@ export const DashboardMessageSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("soldier_update"),
     payload: SoldierSchema,
+  }),
+  z.object({
+    type: z.literal("reference_station"),
+    payload: ReferenceStationPacketSchema,
+    pressureHpa: z.number().optional(),
+    timestamp: z.number().optional(),
   }),
   z.object({
     type: z.literal("ping"),

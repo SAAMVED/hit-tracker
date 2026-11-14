@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
-import { floorLabelToNumber } from "@hit-tracker/shared";
+import { floorLabelToNumber, floorNumberToLabel, SEA_LEVEL_HPA } from "@hit-tracker/shared";
 import FloorSelector from "./FloorSelector.jsx";
 import Roster from "./Roster.jsx";
 import Viewport from "./Viewport.jsx";
@@ -7,6 +7,7 @@ import AlertsPanel from "./AlertsPanel.jsx";
 import ReplayControls from "./ReplayControls.jsx";
 import ModelCalibrationModal from "./ModelCalibrationModal.jsx";
 import SecurityLogModal from "./SecurityLogModal.jsx";
+import BarometerCalibrationModal from "./BarometerCalibrationModal.jsx";
 import { playCriticalAlertBeep } from "../utils/audio.js";
 
 export default function Dashboard({ auth, onLogout }) {
@@ -29,6 +30,12 @@ export default function Dashboard({ auth, onLogout }) {
 
   // ── Security Log State ──────────────────────────────────────────────────────
   const [isSecurityLogOpen, setIsSecurityLogOpen] = useState(false);
+
+  // ── Differential Barometer Calibration State ────────────────────────────────
+  const [isBaroModalOpen, setIsBaroModalOpen] = useState(false);
+  const [correctionEnabled, setCorrectionEnabled] = useState(true);
+  const [referencePressure, setReferencePressure] = useState(SEA_LEVEL_HPA);
+  const [baroHistory, setBaroHistory] = useState([]);
 
   // ── Replay State ────────────────────────────────────────────────────────────
   const [missions, setMissions] = useState([]);
@@ -133,6 +140,26 @@ export default function Dashboard({ auth, onLogout }) {
               const updated = [...currentTrail.slice(-29), newPoint];
               return { ...prev, [s.soldierId]: updated };
             });
+
+            // Record barometric history sample for calibration comparison chart
+            setBaroHistory((prev) => {
+              const sample = {
+                soldierId: s.soldierId,
+                timestamp: s.timestamp || Date.now(),
+                rawAltitude: s.rawAltitude ?? s.altitude ?? 0,
+                correctedAltitude: s.correctedAltitude ?? s.altitude ?? 0,
+                pressureHpa: s.pressureHpa,
+              };
+              return [...prev.slice(-300), sample];
+            });
+          }
+        }
+
+        // 4. Reference Barometer Station Feed from ICP
+        else if (msg.type === "reference_station") {
+          const ref = msg.payload || msg;
+          if (ref && typeof ref.pressureHpa === "number") {
+            setReferencePressure(ref.pressureHpa);
           }
         }
 
@@ -278,8 +305,25 @@ export default function Dashboard({ auth, onLogout }) {
     return { soldiers: soldiersMap, trails: trailsMap };
   }, [mode, replayTime, replayPackets]);
 
-  // Current active soldiers, trails, alerts depending on mode
-  const activeSoldiers = mode === "replay" ? replayState.soldiers : liveSoldiers;
+  // Current active soldiers, trails, alerts depending on mode and differential correction state
+  const activeSoldiers = useMemo(() => {
+    const base = mode === "replay" ? replayState.soldiers : liveSoldiers;
+    if (correctionEnabled) return base;
+
+    // When weather drift correction is toggled OFF, display uncorrected raw altitude and floor
+    const uncorrected = {};
+    for (const [id, s] of Object.entries(base)) {
+      const rawAlt = s.rawAltitude ?? s.altitude ?? 0;
+      const rawFloorNum = Math.round(rawAlt / 3.5);
+      uncorrected[id] = {
+        ...s,
+        altitude: rawAlt,
+        estimatedFloor: floorNumberToLabel(rawFloorNum),
+      };
+    }
+    return uncorrected;
+  }, [mode, replayState.soldiers, liveSoldiers, correctionEnabled]);
+
   const activeTrails = mode === "replay" ? replayState.trails : liveTrails;
   const activeAlerts = mode === "replay" ? [] : liveAlerts;
 
@@ -390,6 +434,20 @@ export default function Dashboard({ auth, onLogout }) {
         </div>
 
         <div className="flex items-center gap-3">
+          {/* Barometer Calibration */}
+          <button
+            onClick={() => setIsBaroModalOpen(true)}
+            className="px-2 py-1 rounded border border-emerald-500/40 bg-emerald-950/30 hover:bg-emerald-950/60 text-[10px] text-emerald-300 uppercase font-bold tracking-wider transition-colors flex items-center gap-1.5"
+            title="Differential Barometer Calibration & Weather Drift Comparison"
+          >
+            <span>Barometer</span>
+            <span
+              className={`w-1.5 h-1.5 rounded-full ${
+                correctionEnabled ? "bg-emerald-400" : "bg-red-400 animate-pulse"
+              }`}
+            />
+          </button>
+
           {/* Commander Tools */}
           {auth.role === "commander" && (
             <>
@@ -493,6 +551,19 @@ export default function Dashboard({ auth, onLogout }) {
           onSelectMission={(id) => setSelectedMissionId(id)}
         />
       )}
+
+      {/* ── Barometer Calibration Modal ──────────────────────────────────── */}
+      <BarometerCalibrationModal
+        isOpen={isBaroModalOpen}
+        onClose={() => setIsBaroModalOpen(false)}
+        soldiers={activeSoldiers}
+        selectedSoldierId={selectedSoldierId}
+        onSelectSoldier={setSelectedSoldierId}
+        correctionEnabled={correctionEnabled}
+        onToggleCorrection={() => setCorrectionEnabled(!correctionEnabled)}
+        referencePressure={referencePressure}
+        history={baroHistory}
+      />
 
       {/* ── Commander Modals ─────────────────────────────────────────────── */}
       {auth.role === "commander" && (

@@ -87,6 +87,16 @@ export function createDatabase() {
     );
 
     CREATE INDEX IF NOT EXISTS idx_rejected_soldier ON rejected_packets(soldier_id, timestamp DESC);
+
+    CREATE TABLE IF NOT EXISTS reference_readings (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      station_id    TEXT NOT NULL,
+      pressure_hpa  REAL NOT NULL,
+      temperature_c REAL,
+      timestamp     INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_ref_ts ON reference_readings(timestamp DESC);
   `);
 
   try {

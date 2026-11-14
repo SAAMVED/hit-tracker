@@ -4,6 +4,7 @@ import {
   FloorEstimator,
   IngestMessageSchema,
   validatePacket,
+  hypsometricAltitude,
 } from "@hit-tracker/shared";
 import { verifyToken } from "./auth.js";
 
@@ -21,6 +22,19 @@ const latestSoldierStates = new Map();
 
 /** Map of last accepted valid telemetry packet per soldier for validation */
 const lastValidPackets = new Map();
+
+/** Latest reference station barometer reading at ICP */
+let latestReferenceStation = {
+  stationId: "ICP-BARO-1",
+  pressureHpa: 1013.25,
+  timestamp: Date.now(),
+};
+
+/** Baseline reference station pressure at system startup / mission entry */
+let initialReferencePressure = null;
+
+/** Baseline reference station pressure per soldier when first observed */
+const soldierEntryReferencePressures = new Map();
 
 /**
  * Retrieves or initializes a FloorEstimator for a soldier.
@@ -115,6 +129,38 @@ export function createWebSocketGateway(httpServer, db) {
       const parsed = IngestMessageSchema.safeParse(raw);
       if (!parsed.success) return;
 
+      // Handle Reference Barometer Station feed from ICP
+      if (parsed.data.type === "reference_station") {
+        const refPkt = parsed.data.payload;
+        latestReferenceStation = refPkt;
+        if (initialReferencePressure === null) {
+          initialReferencePressure = refPkt.pressureHpa;
+        }
+
+        try {
+          db.prepare(`
+            INSERT INTO reference_readings (station_id, pressure_hpa, temperature_c, timestamp)
+            VALUES (?, ?, ?, ?)
+          `).run(
+            refPkt.stationId,
+            refPkt.pressureHpa,
+            refPkt.temperatureC ?? null,
+            refPkt.timestamp
+          );
+        } catch (dbErr) {
+          console.error("[gateway] Failed to store reference reading:", dbErr);
+        }
+
+        broadcastToDashboard({
+          type: "reference_station",
+          payload: refPkt,
+          pressureHpa: refPkt.pressureHpa,
+          timestamp: refPkt.timestamp,
+        });
+        return;
+      }
+
+      // Handle Soldier Telemetry
       const pkt = parsed.data.payload;
 
       // 2. Validate telemetry packet physics and detect spoofing/corruption
@@ -142,9 +188,25 @@ export function createWebSocketGateway(httpServer, db) {
       lastValidPackets.set(pkt.soldierId, { ...pkt });
       packetsProcessedThisSec++;
 
-      // 3. Run barometric floor estimation per soldier (P0 from first reading)
+      // Track soldier's entry baseline reference pressure
+      if (!soldierEntryReferencePressures.has(pkt.soldierId)) {
+        soldierEntryReferencePressures.set(
+          pkt.soldierId,
+          latestReferenceStation?.pressureHpa ?? 1013.25
+        );
+      }
+      const entryRef = soldierEntryReferencePressures.get(pkt.soldierId);
+      const currentRef = latestReferenceStation?.pressureHpa ?? 1013.25;
+
+      // 3. Run differential barometric floor estimation per soldier (P0 from first reading)
       const estimator = getOrCreateEstimator(pkt.soldierId, pkt.pressureHpa);
-      const estimation = estimator.update(pkt.pressureHpa, pkt.timestamp);
+      const estimation = estimator.update(pkt.pressureHpa, pkt.timestamp, {
+        referenceNow: currentRef,
+        referenceAtEntry: entryRef,
+      });
+
+      // Also compute uncorrected raw altitude for differential comparison display
+      const uncorrectedAlt = hypsometricAltitude(pkt.pressureHpa, estimator.p0Hpa, estimator.tempC);
 
       // Query active mission
       const activeMission = db.prepare("SELECT id FROM missions WHERE status = 'active' ORDER BY started_at DESC LIMIT 1").get();
@@ -157,6 +219,8 @@ export function createWebSocketGateway(httpServer, db) {
         x: pkt.x,
         y: pkt.y,
         altitude: Math.round(estimation.smoothedAltitude * 100) / 100,
+        rawAltitude: Math.round(uncorrectedAlt * 100) / 100,
+        correctedAltitude: Math.round(estimation.smoothedAltitude * 100) / 100,
         estimatedFloor: estimation.floor,
         batteryPct: pkt.batteryPct,
         timestamp: pkt.timestamp,
@@ -233,6 +297,14 @@ export function createWebSocketGateway(httpServer, db) {
         payload: alert,
       });
     }
+
+    // Send latest reference station reading
+    safeSend(ws, {
+      type: "reference_station",
+      payload: latestReferenceStation,
+      pressureHpa: latestReferenceStation.pressureHpa,
+      timestamp: latestReferenceStation.timestamp,
+    });
 
     ws.on("close", () => {
       dashboardClients.delete(ws);

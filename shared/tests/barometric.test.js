@@ -4,6 +4,7 @@ import {
   FloorStateMachine,
   KalmanFilter1D,
   altitudeToPressure,
+  correctedPressure,
   estimateFloor,
   floorLabelToNumber,
   floorNumberToLabel,
@@ -327,5 +328,108 @@ describe("FloorEstimator (end-to-end)", () => {
     expect(updated.floor).toBe("1");
     expect(updated.floorNumber).toBe(1);
     expect(updated.smoothedAltitude).toBeGreaterThan(3.0);
+  });
+});
+
+// ─── Differential Barometry Tests ─────────────────────────────────────────────
+
+describe("correctedPressure (pure function)", () => {
+  it("cancels positive ambient weather drift exactly", () => {
+    const soldierReading = 1014.25;
+    const refAtEntry = 1013.25;
+    const refNow = 1015.25; // +2.0 hPa ambient weather drift
+
+    const corrected = correctedPressure(soldierReading, refNow, refAtEntry);
+    expect(corrected).toBeCloseTo(1012.25, 4);
+  });
+
+  it("cancels negative ambient weather drift (pressure drop) exactly", () => {
+    const soldierReading = 1009.25;
+    const refAtEntry = 1013.25;
+    const refNow = 1011.25; // -2.0 hPa ambient weather drop
+
+    const corrected = correctedPressure(soldierReading, refNow, refAtEntry);
+    expect(corrected).toBeCloseTo(1011.25, 4);
+  });
+
+  it("returns raw pressure when ambient drift is zero", () => {
+    const soldierReading = 1010.5;
+    const corrected = correctedPressure(soldierReading, 1013.25, 1013.25);
+    expect(corrected).toBe(1010.5);
+  });
+
+  it("returns raw pressure safely when reference inputs are omitted or invalid", () => {
+    expect(correctedPressure(1012.0, null, 1013.25)).toBe(1012.0);
+    expect(correctedPressure(1012.0, 1013.25, undefined)).toBe(1012.0);
+  });
+});
+
+describe("Differential Barometry Drift Cancellation vs Uncorrected Drift", () => {
+  it("proves that with drift injected, uncorrected estimation changes floor incorrectly and corrected estimation stays on the right floor", () => {
+    const entryRefPressure = 1013.25;
+    // Soldier is stationed on Floor 2 (nominal altitude: 7.0 m)
+    const trueFloorAltitudeM = 2 * 3.5;
+    const trueSoldierPressure = altitudeToPressure(trueFloorAltitudeM, entryRefPressure);
+
+    // Initialise two identical estimators for the same soldier on Floor 2
+    const uncorrectedEstimator = new FloorEstimator({
+      p0Hpa: entryRefPressure,
+      floorHeightM: 3.5,
+      thresholdBandM: 0.4,
+      minDwellTimeMs: 2000,
+      initialFloor: "2",
+    });
+
+    const correctedEstimator = new FloorEstimator({
+      p0Hpa: entryRefPressure,
+      floorHeightM: 3.5,
+      thresholdBandM: 0.4,
+      minDwellTimeMs: 2000,
+      initialFloor: "2",
+    });
+
+    let t = 1000;
+
+    // Verify initial state on Floor 2 before drift
+    const initUncorr = uncorrectedEstimator.update(trueSoldierPressure, t);
+    const initCorr = correctedEstimator.update(trueSoldierPressure, t, {
+      referenceNow: entryRefPressure,
+      referenceAtEntry: entryRefPressure,
+    });
+    expect(initUncorr.floor).toBe("2");
+    expect(initCorr.floor).toBe("2");
+
+    // Weather drift occurs: ambient barometric pressure rises by +2.5 hPa (equivalent to ~20.7m apparent altitude drop)
+    const weatherDriftHpa = 2.5;
+    const currentRefPressure = entryRefPressure + weatherDriftHpa; // 1015.75 hPa
+    const driftedSoldierReading = trueSoldierPressure + weatherDriftHpa;
+
+    // Simulate 5 seconds dwelling with drifted readings
+    let lastUncorrected;
+    let lastCorrected;
+    for (let i = 0; i < 5; i++) {
+      t += 1000;
+      lastUncorrected = uncorrectedEstimator.update(driftedSoldierReading, t);
+      lastCorrected = correctedEstimator.update(driftedSoldierReading, t, {
+        referenceNow: currentRefPressure,
+        referenceAtEntry: entryRefPressure,
+      });
+    }
+
+    // 1. Uncorrected estimator:
+    // Weather drift (+2.5 hPa) makes the soldier look like they descended by ~20.7 m.
+    // 7.0 m - 20.7 m = -13.7 m (Basement Level 2 / -2).
+    // The uncorrected floor changes INCORRECTLY:
+    expect(lastUncorrected.smoothedAltitude).toBeLessThan(0);
+    expect(lastUncorrected.floor).toBe("B2");
+    expect(lastUncorrected.floorNumber).toBe(-2);
+
+    // 2. Corrected estimator:
+    // Differential barometry removes the +2.5 hPa ambient drift.
+    // Smoothed altitude stays stably near 7.0 m.
+    // The corrected floor estimation stays STABLY on Floor 2:
+    expect(lastCorrected.smoothedAltitude).toBeCloseTo(trueFloorAltitudeM, 0.5);
+    expect(lastCorrected.floor).toBe("2");
+    expect(lastCorrected.floorNumber).toBe(2);
   });
 });

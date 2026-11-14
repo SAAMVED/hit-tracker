@@ -309,13 +309,35 @@ export class FloorStateMachine {
   }
 }
 
+// ─── Differential Barometry (Weather Drift Cancellation) ─────────────────────
+
+/**
+ * Removes ambient weather drift using differential barometry against a base/ICP reference station.
+ *
+ * ΔP_weather = referenceNow - referenceAtEntry
+ * P_corrected = soldierPressure - ΔP_weather
+ *
+ * @param {number} soldierPressure - Barometric pressure measured by soldier's sensor (hPa)
+ * @param {number} referenceNow - Current pressure measured by reference station (hPa)
+ * @param {number} referenceAtEntry - Reference station pressure when mission / entry occurred (hPa)
+ * @returns {number} Corrected pressure free of ambient atmospheric weather drift
+ */
+export function correctedPressure(soldierPressure, referenceNow, referenceAtEntry) {
+  if (typeof referenceNow !== "number" || typeof referenceAtEntry !== "number") {
+    return soldierPressure;
+  }
+  const ambientDrift = referenceNow - referenceAtEntry;
+  return soldierPressure - ambientDrift;
+}
+
 // ─── Integrated Floor Estimator ───────────────────────────────────────────────
 
 /**
  * End-to-end barometric floor estimator combining:
- * 1. Hypsometric formula (pressure -> raw relative altitude)
- * 2. 1D Kalman filter (raw altitude -> smoothed altitude)
- * 3. Hysteresis state machine (smoothed altitude -> floor label with dwell time)
+ * 1. Differential barometry drift correction (if reference pressures provided)
+ * 2. Hypsometric formula (pressure -> raw relative altitude)
+ * 3. 1D Kalman filter (raw altitude -> smoothed altitude)
+ * 4. Hysteresis state machine (smoothed altitude -> floor label with dwell time)
  */
 export class FloorEstimator {
   p0Hpa;
@@ -337,9 +359,23 @@ export class FloorEstimator {
 
   /**
    * Process a new barometric pressure sample.
+   *
+   * @param {number} pressureHpa - Current barometric pressure (hPa)
+   * @param {number} timestampMs - Timestamp in milliseconds
+   * @param {object} [options={}] - Optional tuning & differential reference pressures
+   * @param {number} [options.referenceNow] - Current reference station pressure
+   * @param {number} [options.referenceAtEntry] - Baseline reference station pressure at entry
    */
-  update(pressureHpa, timestampMs) {
-    const rawAltitude = hypsometricAltitude(pressureHpa, this.p0Hpa, this.tempC);
+  update(pressureHpa, timestampMs, options = {}) {
+    let effectivePressure = pressureHpa;
+    const refNow = options.referenceNow ?? null;
+    const refEntry = options.referenceAtEntry ?? null;
+
+    if (typeof refNow === "number" && typeof refEntry === "number") {
+      effectivePressure = correctedPressure(pressureHpa, refNow, refEntry);
+    }
+
+    const rawAltitude = hypsometricAltitude(effectivePressure, this.p0Hpa, this.tempC);
     const smoothedAltitude = this.#kalman.update(rawAltitude);
     const state = this.#stateMachine.update(smoothedAltitude, timestampMs);
 
@@ -349,6 +385,7 @@ export class FloorEstimator {
       floor: state.floor,
       floorNumber: state.floorNumber,
       changed: state.changed,
+      effectivePressure,
     };
   }
 

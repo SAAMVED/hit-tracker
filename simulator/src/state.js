@@ -75,7 +75,7 @@ function moveTowards(current, target, maxStep) {
  * Advance the soldier's simulation state by 1 second (1 Hz tick).
  * Returns null if the soldier is experiencing temporary signal/comm loss (for demo).
  */
-export function tick(state, dtSec = 1.0, nowMs = Date.now()) {
+export function tick(state, dtSec = 1.0, nowMs = Date.now(), driftHpa = 0) {
   // ── Demo Alert: Signal Drop for Soldier D4 ──────────────────────────────────
   if (state.def.id === "D4") {
     if (state.commLossUntilMs && nowMs < state.commLossUntilMs) {
@@ -173,10 +173,10 @@ export function tick(state, dtSec = 1.0, nowMs = Date.now()) {
   }
 
   // ── Pressure Generation from Altitude ──────────────────────────────────────
-  // Use inverse hypsometric formula + small sensor noise (±0.06 hPa)
+  // Use inverse hypsometric formula + small sensor noise (±0.06 hPa) + optional ambient drift
   const sensorNoiseHpa = (Math.random() - 0.5) * 0.08;
   const theoreticalPressure = altitudeToPressure(state.altitudeM, SEA_LEVEL_HPA);
-  const pressureHpa = theoreticalPressure + sensorNoiseHpa;
+  const pressureHpa = theoreticalPressure + sensorNoiseHpa + driftHpa;
 
   const packet = {
     soldierId: state.def.id,

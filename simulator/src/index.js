@@ -9,6 +9,7 @@
  */
 
 import { WebSocket } from "ws";
+import { SEA_LEVEL_HPA } from "@hit-tracker/shared";
 import { SOLDIERS } from "./soldiers.js";
 import { initialState, tick } from "./state.js";
 
@@ -17,6 +18,7 @@ const INGEST_URL = `${SERVER_URL}/ws/ingest`;
 const TICK_MS = parseInt(process.env.TICK_MS ?? "1000", 10);
 
 const states = SOLDIERS.map(initialState);
+const simStartMs = Date.now();
 
 let ws = null;
 let reconnectTimer = null;
@@ -34,6 +36,9 @@ function connect() {
     if (process.env.SIM_SPOOF === "1") {
       console.log("[simulator] SIM_SPOOF=1 active: Soldier A4 will inject invalid/spoofed packets every 12s");
     }
+    if (process.env.SIM_DRIFT === "1") {
+      console.log("[simulator] SIM_DRIFT=1 active: Injecting slow ambient weather drift into barometric readings");
+    }
     if (reconnectTimer) {
       clearTimeout(reconnectTimer);
       reconnectTimer = null;
@@ -41,8 +46,34 @@ function connect() {
 
     tickInterval = setInterval(() => {
       if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      const nowMs = Date.now();
+
+      // Ambient weather drift calculation: slow drift over time (a few hPa over the mission)
+      let driftHpa = 0;
+      if (process.env.SIM_DRIFT === "1") {
+        const elapsedSec = (nowMs - simStartMs) / 1000;
+        // Gradual drift: rises by ~0.8 hPa every 30 seconds (~2.4 hPa by 90s)
+        driftHpa = (elapsedSec / 30) * 0.8;
+      }
+
+      // 1. Emit reference station feed from ICP at ground level
+      const refNoise = (Math.random() - 0.5) * 0.04;
+      const referencePressure = SEA_LEVEL_HPA + driftHpa + refNoise;
+      ws.send(
+        JSON.stringify({
+          type: "reference_station",
+          payload: {
+            stationId: "ICP-BARO-1",
+            pressureHpa: Math.round(referencePressure * 100) / 100,
+            timestamp: nowMs,
+            temperatureC: 15.0,
+          },
+        })
+      );
+
+      // 2. Emit telemetry for all 16 soldiers with identical ambient drift applied
       for (const state of states) {
-        const packet = tick(state);
+        const packet = tick(state, TICK_MS / 1000, nowMs, driftHpa);
         if (packet) {
           ws.send(JSON.stringify({ type: "telemetry", payload: packet }));
         }
