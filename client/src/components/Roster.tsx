@@ -40,8 +40,8 @@ const TEAMS = [
   {
     id: "Charlie",
     name: "Charlie (Support)",
-    colour: "bg-amber-500",
-    borderColour: "border-amber-500/50",
+    colour: "bg-yellow-500",
+    borderColour: "border-yellow-500/50",
     soldiers: [
       { id: "C1", name: "Nk Pradeep Reddy" },
       { id: "C2", name: "Sep Ashok Verma" },
@@ -127,9 +127,9 @@ export default function Roster({ role, soldiers, alerts, onSelectSoldier }: Prop
                   onClick={() => onSelectSoldier?.(sDef.id)}
                   className={`flex flex-col gap-1 p-2 rounded border bg-nsg-surface/80 hover:bg-nsg-border/40 transition-colors cursor-pointer ${
                     alert?.severity === "critical"
-                      ? "border-red-500 bg-red-950/20"
+                      ? "border-red-500 bg-red-950/40 ring-2 ring-red-500 animate-pulse shadow-md shadow-red-950"
                       : alert?.severity === "warning"
-                      ? "border-amber-500/80 bg-amber-950/20"
+                      ? "border-amber-500/80 bg-amber-950/30 ring-1 ring-amber-500/50"
                       : "border-nsg-border/60"
                   }`}
                 >

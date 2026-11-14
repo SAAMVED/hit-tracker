@@ -438,9 +438,7 @@ async function main() {
   console.log(`[generator] Wrote client static asset: ${clientPath}`);
 }
 
-if (process.argv[1] && process.argv[1].endsWith("index.ts")) {
-  main().catch((err) => {
-    console.error("[generator] Error:", err);
-    process.exit(1);
-  });
-}
+main().catch((err) => {
+  console.error("[generator] Error:", err);
+  process.exit(1);
+});

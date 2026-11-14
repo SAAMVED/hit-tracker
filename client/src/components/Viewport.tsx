@@ -17,10 +17,10 @@ interface Props {
 }
 
 const TEAM_COLORS: Record<string, string> = {
-  Alpha: "#ef4444",
-  Bravo: "#3b82f6",
-  Charlie: "#f59e0b",
-  Delta: "#a855f7",
+  Alpha: "#ef4444",   // Red
+  Bravo: "#3b82f6",   // Blue
+  Charlie: "#eab308", // Yellow
+  Delta: "#a855f7",   // Purple
 };
 
 /**
@@ -238,7 +238,7 @@ export default function Viewport({
           <span className="text-gray-300">Bravo</span>
         </div>
         <div className="flex items-center gap-1">
-          <span className="w-2 h-2 rounded-full bg-amber-500" />
+          <span className="w-2 h-2 rounded-full bg-yellow-500" />
           <span className="text-gray-300">Charlie</span>
         </div>
         <div className="flex items-center gap-1">
@@ -275,6 +275,10 @@ export default function Viewport({
 
         {/* 3D Movement Trails */}
         {soldiersList.map((s) => {
+          const sFloorNum = floorLabelToNumber(s.estimatedFloor);
+          if (floorMode === "isolated" && sFloorNum !== floor) return null;
+          if (floorMode === "cutaway" && sFloorNum > floor) return null;
+
           const trail = trails[s.soldierId];
           if (!trail || trail.length < 2) return null;
           return (
