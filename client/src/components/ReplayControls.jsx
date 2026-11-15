@@ -88,7 +88,7 @@ const durationLabel = `${Math.floor(durationSeconds / 60)
         <button
           onClick={onTogglePlay}
           className="w-8 h-8 rounded-full flex items-center justify-center bg-nsg-accent text-nsg-dark font-bold hover:bg-emerald-400 transition-colors shadow-sm text-sm"
-          title={isPlaying ? "Pause" : "Play"}
+          title={isPlaying ? "Pause replay" : "Play replay"}
         >
           {isPlaying ? "⏸" : "▶"}
         </button>
