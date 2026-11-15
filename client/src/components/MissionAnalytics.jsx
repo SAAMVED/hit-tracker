@@ -119,7 +119,7 @@ export default function MissionAnalytics({
           <h1 className="mt-1 text-xl font-bold tracking-wide text-white sm:text-2xl">Mission Report</h1>
           <p className="mt-1 text-xs text-gray-400">Movement and floor activity from recorded mission telemetry.</p>
         </div>
-        <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-end">
+        <div className="flex w-full flex-col gap-3 sm:w-auto sm:flex-row sm:items-end">
           <label className="flex w-full flex-col gap-1.5 text-[10px] font-bold uppercase tracking-wider text-gray-400 sm:w-80">
             Select mission
             <select
@@ -140,7 +140,7 @@ export default function MissionAnalytics({
             type="button"
             onClick={handleExportJson}
             disabled={!analytics || loading}
-            className="rounded border border-emerald-500/40 bg-emerald-950/30 px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-emerald-300 transition-colors hover:bg-emerald-950/60 disabled:cursor-not-allowed disabled:opacity-40"
+            className="rounded border border-emerald-500/40 bg-emerald-950/30 px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-emerald-300 transition-colors hover:bg-emerald-950/60 disabled:cursor-not-allowed disabled:opacity-40 sm:h-[2.125rem] sm:shrink-0"
             title={analytics ? "Download the selected mission analytics report as JSON" : "Analytics are not loaded yet"}
           >
             Export JSON
