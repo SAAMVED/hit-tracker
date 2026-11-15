@@ -556,7 +556,7 @@ export default function Dashboard({ auth, onLogout }) {
       <BarometerCalibrationModal
         isOpen={isBaroModalOpen}
         onClose={() => setIsBaroModalOpen(false)}
-        soldiers={activeSoldiers}
+        soldiers={liveSoldiers}
         selectedSoldierId={selectedSoldierId}
         onSelectSoldier={setSelectedSoldierId}
         correctionEnabled={correctionEnabled}
