@@ -3,7 +3,7 @@ import path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
 import { loginHandler, verifyToken } from "./auth.js";
-import { CalibrationSchema } from "@hit-tracker/shared";
+import { CalibrationSchema, calculateMissionAnalytics } from "@hit-tracker/shared";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -182,6 +182,44 @@ export function createApp(db) {
       return res.status(404).json({ error: "Mission not found" });
     }
     res.json({ ok: true, id, endedAt: now });
+  });
+
+  app.get("/api/missions/:id/analytics", (req, res) => {
+    const asOf = Date.now();
+    const row = db.prepare(`
+      SELECT id, name, started_at, ended_at, status
+      FROM missions
+      WHERE id = ?
+    `).get(req.params.id);
+
+    if (!row) {
+      return res.status(404).json({ error: "Mission not found" });
+    }
+
+    const telemetryRows = db.prepare(`
+      SELECT soldier_id, team_id, ts, x, y, floor
+      FROM telemetry
+      WHERE mission_id = ?
+      ORDER BY soldier_id ASC, ts ASC, id ASC
+    `).all(req.params.id);
+
+    const mission = {
+      id: row.id,
+      name: row.name,
+      startedAt: row.started_at,
+      endedAt: row.ended_at,
+      status: row.status,
+    };
+    const telemetry = telemetryRows.map((telemetryRow) => ({
+      soldierId: telemetryRow.soldier_id,
+      teamId: telemetryRow.team_id,
+      timestamp: telemetryRow.ts,
+      x: telemetryRow.x,
+      y: telemetryRow.y,
+      estimatedFloor: telemetryRow.floor,
+    }));
+
+    res.json(calculateMissionAnalytics({ mission, telemetry, asOf }));
   });
 
   app.get("/api/missions/:id/telemetry", (req, res) => {

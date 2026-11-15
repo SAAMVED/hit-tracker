@@ -123,6 +123,11 @@ export function createDatabase() {
     // Column already exists
   }
 
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_telemetry_mission_soldier_ts
+    ON telemetry(mission_id, soldier_id, ts)
+  `);
+
   // Seed default calibration if not present
   const existingCalib = db.prepare("SELECT id FROM calibration WHERE id = 'default'").get();
   if (!existingCalib) {
