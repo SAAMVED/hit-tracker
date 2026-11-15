@@ -13,6 +13,26 @@ export default function MissionAnalytics({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
+  const handleExportJson = () => {
+    if (!analytics) return;
+
+    const reportName = analytics.mission?.name || analytics.mission?.id || selectedMissionId;
+    const filename = `${safeFilename(reportName)}-analytics.json`;
+    const blob = new Blob([JSON.stringify(analytics, null, 2)], { type: "application/json" });
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = objectUrl;
+    link.download = filename;
+    link.style.display = "none";
+    document.body.appendChild(link);
+    try {
+      link.click();
+    } finally {
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+    }
+  };
+
   useEffect(() => {
     if (missionsLoading) return undefined;
     if (missionsError) {
@@ -99,22 +119,33 @@ export default function MissionAnalytics({
           <h1 className="mt-1 text-xl font-bold tracking-wide text-white sm:text-2xl">Mission Report</h1>
           <p className="mt-1 text-xs text-gray-400">Movement and floor activity from recorded mission telemetry.</p>
         </div>
-        <label className="flex w-full flex-col gap-1.5 text-[10px] font-bold uppercase tracking-wider text-gray-400 sm:w-80">
-          Select mission
-          <select
-            value={selectedMissionId || ""}
-            onChange={(event) => onSelectMission(event.target.value)}
-            disabled={missionsLoading || missions.length === 0}
-            className="rounded border border-nsg-border bg-nsg-surface px-3 py-2 text-xs font-normal normal-case tracking-normal text-gray-100 outline-none focus:border-nsg-accent disabled:cursor-not-allowed disabled:opacity-60"
+        <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-end">
+          <label className="flex w-full flex-col gap-1.5 text-[10px] font-bold uppercase tracking-wider text-gray-400 sm:w-80">
+            Select mission
+            <select
+              value={selectedMissionId || ""}
+              onChange={(event) => onSelectMission(event.target.value)}
+              disabled={missionsLoading || missions.length === 0}
+              className="rounded border border-nsg-border bg-nsg-surface px-3 py-2 text-xs font-normal normal-case tracking-normal text-gray-100 outline-none focus:border-nsg-accent disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {missions.length === 0 && <option value="">No missions available</option>}
+              {missions.map((mission) => (
+                <option key={mission.id} value={mission.id}>
+                  {mission.name} ({mission.status})
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            type="button"
+            onClick={handleExportJson}
+            disabled={!analytics || loading}
+            className="rounded border border-emerald-500/40 bg-emerald-950/30 px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-emerald-300 transition-colors hover:bg-emerald-950/60 disabled:cursor-not-allowed disabled:opacity-40"
+            title={analytics ? "Download the selected mission analytics report as JSON" : "Analytics are not loaded yet"}
           >
-            {missions.length === 0 && <option value="">No missions available</option>}
-            {missions.map((mission) => (
-              <option key={mission.id} value={mission.id}>
-                {mission.name} ({mission.status})
-              </option>
-            ))}
-          </select>
-        </label>
+            Export JSON
+          </button>
+        </div>
       </div>
 
       {missionsLoading ? (
@@ -291,4 +322,14 @@ function floorTitle(floor) {
   if (floor === "G") return "Ground floor";
   if (floor === "B1" || floor === "B2") return `Basement ${floor.slice(1)}`;
   return `Floor ${floor}`;
+}
+
+function safeFilename(value) {
+  const normalized = (value || "mission")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
+  return normalized || "mission";
 }
