@@ -5,6 +5,7 @@ import Roster from "./Roster.jsx";
 import Viewport from "./Viewport.jsx";
 import AlertsPanel from "./AlertsPanel.jsx";
 import ReplayControls from "./ReplayControls.jsx";
+import MissionAnalytics from "./MissionAnalytics.jsx";
 import ModelCalibrationModal from "./ModelCalibrationModal.jsx";
 import SecurityLogModal from "./SecurityLogModal.jsx";
 import BarometerCalibrationModal from "./BarometerCalibrationModal.jsx";
@@ -39,6 +40,8 @@ export default function Dashboard({ auth, onLogout }) {
 
   // ── Replay State ────────────────────────────────────────────────────────────
   const [missions, setMissions] = useState([]);
+  const [missionsLoading, setMissionsLoading] = useState(false);
+  const [missionsError, setMissionsError] = useState("");
   const [selectedMissionId, setSelectedMissionId] = useState(null);
   const [replayPackets, setReplayPackets] = useState([]);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -211,22 +214,26 @@ export default function Dashboard({ auth, onLogout }) {
 
   // ── Replay Missions Fetch & Selection ───────────────────────────────────────
   const fetchMissions = useCallback(async () => {
+    setMissionsLoading(true);
+    setMissionsError("");
     try {
       const res = await fetch("/api/missions");
-      if (res.ok) {
-        const data = await res.json();
-        setMissions(data);
-        if (data.length > 0 && !selectedMissionId) {
-          setSelectedMissionId(data[0].id);
-        }
+      if (!res.ok) throw new Error("Failed to load missions");
+      const data = await res.json();
+      setMissions(data);
+      if (data.length > 0) {
+        setSelectedMissionId((currentId) => currentId || data[0].id);
       }
     } catch (err) {
       console.error("[dashboard] Failed to fetch missions:", err);
+      setMissionsError(err.message || "Failed to load missions");
+    } finally {
+      setMissionsLoading(false);
     }
-  }, [selectedMissionId]);
+  }, []);
 
   useEffect(() => {
-    if (mode === "replay") {
+    if (mode === "replay" || mode === "analytics") {
       fetchMissions();
     }
   }, [mode, fetchMissions]);
@@ -404,6 +411,19 @@ export default function Dashboard({ auth, onLogout }) {
             >
               Replay
             </button>
+            <button
+              onClick={() => {
+                setMode("analytics");
+                setIsPlaying(false);
+              }}
+              className={`px-2.5 py-0.5 rounded text-[10px] font-bold tracking-wider uppercase transition-colors ${
+                mode === "analytics"
+                  ? "bg-emerald-700 text-white"
+                  : "text-gray-400 hover:text-white"
+              }`}
+            >
+              Analytics
+            </button>
           </div>
         </div>
 
@@ -423,11 +443,18 @@ export default function Dashboard({ auth, onLogout }) {
                 ({Object.keys(activeSoldiers).length} soldiers online)
               </span>
             </>
-          ) : (
+          ) : mode === "replay" ? (
             <div className="flex items-center gap-2">
               <span className="h-2.5 w-2.5 rounded-full bg-blue-400 animate-pulse" />
               <span className="text-xs font-bold text-blue-300 tracking-wider uppercase">
                 Mission Replay Mode ({replayPackets.length} pkts)
+              </span>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2">
+              <span className="h-2.5 w-2.5 rounded-full bg-emerald-400" />
+              <span className="text-xs font-bold text-emerald-300 tracking-wider uppercase">
+                Mission Analytics
               </span>
             </div>
           )}
@@ -484,55 +511,69 @@ export default function Dashboard({ auth, onLogout }) {
 
       {/* ── Main Content ─────────────────────────────────────────────────── */}
       <div className="flex flex-1 overflow-hidden relative">
-        {/* Left: Floor Selector with Unit Counts */}
-        <aside className="w-16 bg-nsg-surface border-r border-nsg-border flex flex-col items-center py-3 gap-2 flex-shrink-0 z-20">
-          <FloorSelector
-            floors={[5, 4, 3, 2, 1, 0, -1, -2]}
-            activeFloor={activeFloor}
-            onSelect={setActiveFloor}
-            unitCounts={unitCounts}
-          />
-        </aside>
-
-        {/* Centre: 3D Viewport */}
-        <main className="flex-1 relative overflow-hidden bg-nsg-dark">
-          <Viewport
-            floor={activeFloor}
-            floorMode={floorMode}
-            onFloorModeChange={setFloorMode}
-            soldiers={activeSoldiers}
-            trails={activeTrails}
-            selectedSoldierId={selectedSoldierId}
-            calibration={calibration}
-            alerts={activeAlerts}
-          />
-
-          {/* Floating Alerts Overlay (Live mode) */}
-          {mode === "live" && (
-            <AlertsPanel
-              alerts={activeAlerts}
-              onAcknowledge={handleAcknowledgeAlert}
-              onClear={handleClearAlert}
+        {mode === "analytics" ? (
+          <main className="flex-1 min-w-0 overflow-y-auto bg-nsg-dark">
+            <MissionAnalytics
+              missions={missions}
+              missionsLoading={missionsLoading}
+              missionsError={missionsError}
+              selectedMissionId={selectedMissionId}
+              onSelectMission={setSelectedMissionId}
             />
-          )}
-        </main>
+          </main>
+        ) : (
+          <>
+            {/* Left: Floor Selector with Unit Counts */}
+            <aside className="w-16 bg-nsg-surface border-r border-nsg-border flex flex-col items-center py-3 gap-2 flex-shrink-0 z-20">
+              <FloorSelector
+                floors={[5, 4, 3, 2, 1, 0, -1, -2]}
+                activeFloor={activeFloor}
+                onSelect={setActiveFloor}
+                unitCounts={unitCounts}
+              />
+            </aside>
 
-        {/* Right: Roster Panel grouped by HIT */}
-        <aside className="w-72 bg-nsg-surface border-l border-nsg-border overflow-y-auto flex-shrink-0 z-20">
-          <Roster
-            role={auth.role}
-            soldiers={activeSoldiers}
-            alerts={activeAlerts}
-            onSelectSoldier={(id) => {
-              setSelectedSoldierId(id);
-              // Focus floor on selected soldier's floor if available
-              const s = activeSoldiers[id];
-              if (s && s.estimatedFloor) {
-                setActiveFloor(floorLabelToNumber(s.estimatedFloor));
-              }
-            }}
-          />
-        </aside>
+            {/* Centre: 3D Viewport */}
+            <main className="flex-1 relative overflow-hidden bg-nsg-dark">
+              <Viewport
+                floor={activeFloor}
+                floorMode={floorMode}
+                onFloorModeChange={setFloorMode}
+                soldiers={activeSoldiers}
+                trails={activeTrails}
+                selectedSoldierId={selectedSoldierId}
+                calibration={calibration}
+                alerts={activeAlerts}
+              />
+
+              {/* Floating Alerts Overlay (Live mode) */}
+              {mode === "live" && (
+                <AlertsPanel
+                  alerts={activeAlerts}
+                  onAcknowledge={handleAcknowledgeAlert}
+                  onClear={handleClearAlert}
+                />
+              )}
+            </main>
+
+            {/* Right: Roster Panel grouped by HIT */}
+            <aside className="w-72 bg-nsg-surface border-l border-nsg-border overflow-y-auto flex-shrink-0 z-20">
+              <Roster
+                role={auth.role}
+                soldiers={activeSoldiers}
+                alerts={activeAlerts}
+                onSelectSoldier={(id) => {
+                  setSelectedSoldierId(id);
+                  // Focus floor on selected soldier's floor if available
+                  const s = activeSoldiers[id];
+                  if (s && s.estimatedFloor) {
+                    setActiveFloor(floorLabelToNumber(s.estimatedFloor));
+                  }
+                }}
+              />
+            </aside>
+          </>
+        )}
       </div>
 
       {/* ── Replay Scrubber Controls (Replay mode only) ───────────────────── */}
@@ -556,7 +597,7 @@ export default function Dashboard({ auth, onLogout }) {
       <BarometerCalibrationModal
         isOpen={isBaroModalOpen}
         onClose={() => setIsBaroModalOpen(false)}
-        soldiers={activeSoldiers}
+        soldiers={liveSoldiers}
         selectedSoldierId={selectedSoldierId}
         onSelectSoldier={setSelectedSoldierId}
         correctionEnabled={correctionEnabled}

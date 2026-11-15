@@ -72,6 +72,13 @@ Each soldier's device sends a JSON packet at 1 Hz over WebSocket:
 
 See `.env.example` for all required variables.
 
+## Documentation
+
+- [Architecture Decision Records](docs/ADR.md), including differential barometry and mission analytics decisions.
+- [V5 Mission Analytics](docs/V5_MISSION_ANALYTICS.md) for the API, metric rules, dashboard, and current limitations.
+- [Viva Preparation Guide](docs/VIVA_PREPARATION.md) for the implemented formulas, parameters, and technical questions.
+- [Demo Runbook](docs/DEMO_RUNBOOK.md) for the synthetic drift, barometer, replay, and analytics walkthrough.
+
 ## Offline First
 
 HIT-Tracker is designed for forward operating environments with no internet access:

@@ -27,9 +27,44 @@ export default function ReplayControls({
   };
 
   const speeds = [1, 2, 5, 10];
+  const selectedMission = missions.find(
+  (mission) => mission.id === selectedMissionId
+);
+
+const packetCount = selectedMission?.packetCount ?? 0;
+
+const durationSeconds = selectedMission?.minTs && selectedMission?.maxTs
+  ? Math.max(0, Math.round(
+      (selectedMission.maxTs - selectedMission.minTs) / 1000
+    ))
+  : 0;
+
+const durationLabel = `${Math.floor(durationSeconds / 60)
+  .toString()
+  .padStart(2, "0")}:${(durationSeconds % 60)
+  .toString()
+  .padStart(2, "0")}`;
 
   return (
     <div className="flex items-center justify-between px-4 py-2 bg-nsg-dark/95 border-t border-nsg-border text-xs font-mono select-none z-30">
+      <div className="flex items-center gap-4 text-[10px] font-mono">
+  <div className="border border-nsg-border rounded px-3 py-1">
+    <span className="text-gray-500 uppercase">Packets: </span>
+    <span className="text-nsg-accent font-bold">{packetCount}</span>
+  </div>
+
+  <div className="border border-nsg-border rounded px-3 py-1">
+    <span className="text-gray-500 uppercase">Duration: </span>
+    <span className="text-white font-bold">{durationLabel}</span>
+  </div>
+
+  <div className="border border-nsg-border rounded px-3 py-1">
+    <span className="text-gray-500 uppercase">Status: </span>
+    <span className="text-emerald-400 font-bold uppercase">
+      {selectedMission?.status || "N/A"}
+    </span>
+  </div>
+</div>
       {/* Left: Mission Selector */}
       <div className="flex items-center gap-2">
         <span className="text-gray-400 text-[10px] uppercase font-bold tracking-wider">
@@ -53,7 +88,7 @@ export default function ReplayControls({
         <button
           onClick={onTogglePlay}
           className="w-8 h-8 rounded-full flex items-center justify-center bg-nsg-accent text-nsg-dark font-bold hover:bg-emerald-400 transition-colors shadow-sm text-sm"
-          title={isPlaying ? "Pause" : "Play"}
+          title={isPlaying ? "Pause replay" : "Play replay"}
         >
           {isPlaying ? "⏸" : "▶"}
         </button>

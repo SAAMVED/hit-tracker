@@ -6,6 +6,7 @@
   "main": "src/index.js",
   "scripts": {
     "dev": "node --watch src/index.js",
+    "test": "node --test",
     "build": "echo \"build\"",
     "start": "node src/index.js",
     "typecheck": "echo \"typecheck\""
