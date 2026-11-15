@@ -155,7 +155,7 @@ export default function MissionAnalytics({
       ) : missions.length === 0 ? (
         <StatePanel title="No missions available" message="Create or record a mission before viewing analytics." />
       ) : loading ? (
-        <StatePanel title="Loading analytics" message="Calculating the selected mission report…" />
+        <StatePanel title="Loading analytics" message="Loading mission analytics for the selected mission…" />
       ) : error ? (
         <StatePanel title="Could not load analytics" message={error} error />
       ) : analytics && !hasTelemetry ? (
