@@ -412,7 +412,7 @@ export default function BarometerCalibrationModal({
                     <th className="py-1.5 px-2">
                       Corrected (Differential)
                     </th>
-                    <th className="py-1.5 px-2">Δ Alt</th>
+                    <th className="py-1.5 px-2">Altitude difference</th>
                     <th className="py-1.5 px-3 text-right">Status</th>
                   </tr>
                 </thead>
