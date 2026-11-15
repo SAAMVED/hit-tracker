@@ -4,3 +4,4 @@ export * from "./barometric.js";
 export * from "./alerts.js";
 export * from "./validation.js";
 export * from "./mandown.js";
+export * from "./analytics.js";
