@@ -141,7 +141,7 @@ export default function MissionAnalytics({
             onClick={handleExportJson}
             disabled={!analytics || loading}
             className="rounded border border-emerald-500/40 bg-emerald-950/30 px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-emerald-300 transition-colors hover:bg-emerald-950/60 disabled:cursor-not-allowed disabled:opacity-40 sm:h-[2.125rem] sm:shrink-0"
-            title={analytics ? "Download the selected mission analytics report as JSON" : "Analytics are not loaded yet"}
+            title={analytics ? "Download the selected mission's analytics as a JSON file" : "Analytics are not loaded yet"}
           >
             Export JSON
           </button>
