@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+ import { useState, useMemo } from "react";
 import { SEA_LEVEL_HPA, floorNumberToLabel } from "@hit-tracker/shared";
 
 const TACTICAL_ROSTER = [
@@ -304,113 +304,154 @@ export default function BarometerCalibrationModal({
                     <th className="py-1.5 px-3 text-right">Status</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-nsg-border/20">
-                  {TACTICAL_ROSTER.map((soldierDef) => {
-                    
-                    
-                    // Validate raw altitude
-const rawAlt = Number.isFinite(s?.rawAltitude) ? s.rawAltitude : null;
-// Validate corrected altitude
-const correctedAlt = Number.isFinite(s?.correctedAltitude) ? s.correctedAltitude : null;
+  
+<tbody className="divide-y divide-nsg-border/20">
+  {TACTICAL_ROSTER.map((soldierDef) => {
+    const s = soldiers[soldierDef.id];
 
-                    // Prefer existing server-provided estimatedFloor (hysteresis-stabilized)
-                    const correctedFloor = s?.estimatedFloor ?? (s?.correctedAltitude !== undefined ? floorNumberToLabel(Math.round(s.correctedAltitude / 3.5)) : null);
+    const rawAlt = Number.isFinite(s?.rawAltitude)
+      ? s.rawAltitude
+      : null;
 
+    const correctedAlt = Number.isFinite(s?.correctedAltitude)
+      ? s.correctedAltitude
+      : null;
 
-                    // Altitude delta: raw minus corrected (shows drift magnitude)
-                    const altDelta = (rawAlt !== null && correctedAlt !== null) ? rawAlt - correctedAlt : null;
+    const rawFloor =
+      rawAlt !== null
+        ? floorNumberToLabel(Math.round(rawAlt / 3.5))
+        : null;
 
-                    const isSelected = activeId === soldierDef.id;
-                    const teamStyle = TEAM_STYLES[soldierDef.team] ?? {
-                      text: "text-gray-300",
-                      dot: "bg-gray-400",
-                    };
+    const correctedFloor =
+      s?.estimatedFloor ??
+      (correctedAlt !== null
+        ? floorNumberToLabel(Math.round(correctedAlt / 3.5))
+        : null);
 
-                    let statusLabel = "WAITING";
-                    let statusClass = "bg-gray-800/80 text-gray-400 border-gray-700";
+    const altDelta =
+      rawAlt !== null && correctedAlt !== null
+        ? rawAlt - correctedAlt
+        : null;
 
-                    if (rawAlt === null || correctedFloor === null) {
-                      statusLabel = "WAITING";
-                      statusClass = "bg-gray-800/80 text-gray-400 border-gray-700";
-                    } else if (rawFloor !== correctedFloor) {
-                      statusLabel = "DRIFTED";
-                      statusClass = "bg-amber-950/80 text-amber-300 border-amber-500/60 font-bold animate-pulse";
-                    } else {
-                      statusLabel = "STABLE";
-                      statusClass = "bg-emerald-950/60 text-emerald-400 border-emerald-500/40 font-bold";
-                    }
+    const isStale =
+      Number.isFinite(s?.timestamp) &&
+      Date.now() - s.timestamp > 6000;
 
-                    return (
-                      <tr
-                        key={soldierDef.id}
-                        onClick={() => {
-                          setInternalSelectedId(soldierDef.id);
-                          onSelectSoldier?.(soldierDef.id);
-                        }}
-                        className={`cursor-pointer transition-colors border-b border-nsg-border/20 ${
-                          isSelected
-                            ? "bg-nsg-accent/15 text-white font-bold"
-                            : "hover:bg-nsg-border/30 text-gray-300"
-                        }`}
-                      >
-                        <td className="py-1.5 px-3">
-                          <div className="flex items-center gap-1.5">
-                            <span className={`w-2 h-2 rounded-full ${teamStyle.dot}`} />
-                            <span className="font-bold text-gray-200">{soldierDef.id}</span>
-                            <span className="text-[10px] text-gray-500 hidden sm:inline">
-                              {soldierDef.rankName}
-                            </span>
-                          </div>
-                        </td>
-                        <td className="py-1.5 px-2">
-                          <span className={`text-[10px] font-bold ${teamStyle.text}`}>
-                            {soldierDef.team}
-                          </span>
-                        </td>
-                        <td className="py-1.5 px-2">
-                          {rawFloor !== null ? (
-                            <span className="text-red-300 font-bold">
-                              {rawFloor}
-                              <span className="text-[10px] text-gray-500 font-normal ml-1">
-                                ({rawAlt !== null ? rawAlt.toFixed(1) : "0.0"}m)
-                              </span>
-                            </span>
-                          ) : (
-                            <span className="text-gray-600">—</span>
-                          )}
-                        </td>
-                        <td className="py-1.5 px-2">
-                          {correctedFloor !== null ? (
-                            <span className="text-emerald-300 font-bold">
-                              {correctedFloor}
-                              <span className="text-[10px] text-gray-500 font-normal ml-1">
-                                ({correctedAlt !== null ? correctedAlt.toFixed(1) : "0.0"}m)
-                              </span>
-                            </span>
-                          ) : (
-                            <span className="text-gray-600">—</span>
-                          )}
-                        </td>
-                        <td className="py-1.5 px-2">
-                          {altDelta !== null ? (
-                            <span className={`font-bold ${Math.abs(altDelta) < 0.05 ? "text-gray-400" : altDelta > 0 ? "text-amber-300" : "text-sky-300"}`}>
-                              {altDelta >= 0 ? "+" : ""}{altDelta.toFixed(1)}m
-                            </span>
-                          ) : (
-                            <span className="text-gray-600">—</span>
-                          )}
-                        </td>
-                        <td className="py-1.5 px-3 text-right">
-                          <span
-                            className={`px-1.5 py-0.5 rounded text-[9px] uppercase tracking-wider border ${statusClass}`}
-                          >
-                            {statusLabel}
-                          </span>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
+    const isSelected = activeId === soldierDef.id;
+
+    const teamStyle = TEAM_STYLES[soldierDef.team] ?? {
+      text: "text-gray-300",
+      dot: "bg-gray-400",
+    };
+
+    let statusLabel = "WAITING";
+    let statusClass =
+      "bg-gray-800/80 text-gray-400 border-gray-700";
+
+    if (!s || !Number.isFinite(s.timestamp)) {
+      statusLabel = "WAITING";
+    } else if (isStale) {
+      statusLabel = "STALE";
+    } else if (rawAlt === null || correctedFloor === null) {
+      statusLabel = "WAITING";
+    } else if (rawFloor !== correctedFloor) {
+      statusLabel = "DRIFTED";
+      statusClass =
+        "bg-amber-950/80 text-amber-300 border-amber-500/60 font-bold animate-pulse";
+    } else {
+      statusLabel = "STABLE";
+      statusClass =
+        "bg-emerald-950/60 text-emerald-400 border-emerald-500/40 font-bold";
+    }
+
+    return (
+      <tr
+        key={soldierDef.id}
+        onClick={() => {
+          setInternalSelectedId(soldierDef.id);
+          onSelectSoldier?.(soldierDef.id);
+        }}
+        className={`cursor-pointer transition-colors border-b border-nsg-border/20 ${
+          isSelected
+            ? "bg-nsg-accent/15 text-white font-bold"
+            : "hover:bg-nsg-border/30 text-gray-300"
+        }`}
+      >
+        <td className="py-1.5 px-3">
+          <div className="flex items-center gap-1.5">
+            <span className={`w-2 h-2 rounded-full ${teamStyle.dot}`} />
+            <span className="font-bold text-gray-200">
+              {soldierDef.id}
+            </span>
+            <span className="text-[10px] text-gray-500 hidden sm:inline">
+              {soldierDef.rankName}
+            </span>
+          </div>
+        </td>
+
+        <td className="py-1.5 px-2">
+          <span className={`text-[10px] font-bold ${teamStyle.text}`}>
+            {soldierDef.team}
+          </span>
+        </td>
+
+        <td className="py-1.5 px-2">
+          {rawFloor !== null ? (
+            <span className="text-red-300 font-bold">
+              {rawFloor}
+              <span className="text-[10px] text-gray-500 font-normal ml-1">
+                ({rawAlt.toFixed(1)}m)
+              </span>
+            </span>
+          ) : (
+            <span className="text-gray-600">—</span>
+          )}
+        </td>
+
+        <td className="py-1.5 px-2">
+          {correctedFloor !== null ? (
+            <span className="text-emerald-300 font-bold">
+              {correctedFloor}
+              <span className="text-[10px] text-gray-500 font-normal ml-1">
+                ({correctedAlt !== null ? correctedAlt.toFixed(1) : "—"}m)
+              </span>
+            </span>
+          ) : (
+            <span className="text-gray-600">—</span>
+          )}
+        </td>
+
+        <td className="py-1.5 px-2">
+          {altDelta !== null ? (
+            <span
+              className={`font-bold ${
+                Math.abs(altDelta) < 0.05
+                  ? "text-gray-400"
+                  : altDelta > 0
+                    ? "text-amber-300"
+                    : "text-sky-300"
+              }`}
+            >
+              {altDelta >= 0 ? "+" : ""}
+              {altDelta.toFixed(1)}m
+            </span>
+          ) : (
+            <span className="text-gray-600">—</span>
+          )}
+        </td>
+
+        <td className="py-1.5 px-3 text-right">
+          <span
+            className={`px-1.5 py-0.5 rounded text-[9px] uppercase tracking-wider border ${statusClass}`}
+          >
+            {statusLabel}
+          </span>
+        </td>
+      </tr>
+    );
+  })}
+</tbody>
+
               </table>
             </div>
           </div>
