@@ -159,7 +159,7 @@ export default function MissionAnalytics({
       ) : error ? (
         <StatePanel title="Could not load analytics" message={error} error />
       ) : analytics && !hasTelemetry ? (
-        <StatePanel title="No telemetry recorded" message="This mission has no accepted telemetry to summarize." />
+        <StatePanel title="No telemetry recorded" message="No usable telemetry was recorded for this mission." />
       ) : analytics ? (
         <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
           <section className="rounded-lg border border-nsg-border bg-nsg-surface p-4 sm:p-5">
