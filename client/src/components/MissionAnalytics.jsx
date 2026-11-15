@@ -245,7 +245,7 @@ export default function MissionAnalytics({
                 <thead className="bg-black/25 text-[10px] uppercase tracking-wider text-gray-500">
                   <tr>
                     <th className="px-4 py-3 font-bold">Soldier</th>
-                    <th className="px-4 py-3 font-bold">HIT</th>
+                    <th className="px-4 py-3 font-bold">Team</th>
                     <th className="px-4 py-3 text-right font-bold">Distance</th>
                     <th className="px-4 py-3 text-right font-bold">Transitions</th>
                     <th className="px-4 py-3 text-right font-bold">Longest signal lost</th>
