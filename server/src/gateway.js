@@ -1,366 +1,194 @@
 import { WebSocketServer, WebSocket } from "ws";
-import {
-  AlertsEngine,
-  FloorEstimator,
-  IngestMessageSchema,
-  validatePacket,
-  hypsometricAltitude,
-} from "@hit-tracker/shared";
+import { AlertsEngine, FloorEstimator, IngestMessageSchema, validatePacket, hypsometricAltitude } from "@hit-tracker/shared";
 import { verifyToken } from "./auth.js";
 
-/** Dashboard client set – receives broadcast updates */
 const dashboardClients = new Set();
-
-/** Per-soldier barometric floor estimators with Kalman filtering and hysteresis */
 const soldierEstimators = new Map();
-
-/** Centralized alerts engine */
 const alertsEngine = new AlertsEngine();
-
-/** Cache of the latest live state for each soldier to serve snapshots */
 const latestSoldierStates = new Map();
-
-/** Map of last accepted valid telemetry packet per soldier for validation */
 const lastValidPackets = new Map();
-
-/** Latest reference station barometer reading at ICP */
-let latestReferenceStation = {
-  stationId: "ICP-BARO-1",
-  pressureHpa: 1013.25,
-  timestamp: Date.now(),
-};
-
-/** Baseline reference station pressure at system startup / mission entry */
-let initialReferencePressure = null;
-
-/** Baseline reference station pressure per soldier when first observed */
 const soldierEntryReferencePressures = new Map();
+let latestReferenceStation = { stationId: "ICP-BARO-1", pressureHpa: 1013.25, timestamp: Date.now() };
+let initialReferencePressure = null;
+let packetsProcessedThisSec = 0;
 
-/**
- * Retrieves or initializes a FloorEstimator for a soldier.
- * P0 reference pressure is taken from that soldier's very first reading.
- */
 function getOrCreateEstimator(soldierId, initialPressureHpa) {
   let estimator = soldierEstimators.get(soldierId);
   if (!estimator) {
-    estimator = new FloorEstimator({
-      p0Hpa: initialPressureHpa, // Requirement: P0 taken from that soldier's first reading
-      floorHeightM: 3.5,
-      thresholdBandM: 0.4,
-      minDwellTimeMs: 2000,
-    });
+    estimator = new FloorEstimator({ p0Hpa: initialPressureHpa, floorHeightM: 3.5, thresholdBandM: 0.4, minDwellTimeMs: 2000 });
     soldierEstimators.set(soldierId, estimator);
   }
   return estimator;
 }
 
-export function createWebSocketGateway(httpServer, db) {
-  // ── Ingest gateway (devices / simulator → server) ─────────────────────────
+export async function createWebSocketGateway(httpServer, db) {
+  try {
+    const { rows: [reading] } = await db.query(`SELECT station_id,pressure_hpa,temperature_c,timestamp
+      FROM reference_readings ORDER BY timestamp DESC,id DESC LIMIT 1`);
+    if (reading) {
+      latestReferenceStation = {
+        stationId: reading.station_id,
+        pressureHpa: Number(reading.pressure_hpa),
+        temperatureC: reading.temperature_c == null ? undefined : Number(reading.temperature_c),
+        timestamp: new Date(reading.timestamp).getTime(),
+      };
+      initialReferencePressure = latestReferenceStation.pressureHpa;
+    }
+  } catch (error) {
+    throw new Error(`Unable to restore reference barometer state from PostgreSQL: ${error.message}`, { cause: error });
+  }
+
   const ingestWss = new WebSocketServer({ noServer: true });
-
-  // ── Dashboard gateway (server → commander UI) ─────────────────────────────
   const dashboardWss = new WebSocketServer({ noServer: true });
-
-  // Route upgrade requests to the correct WSS based on path
-  httpServer.on("upgrade", (req, socket, head) => {
+  const upgradeHandler = (req, socket, head) => {
     const url = req.url ?? "/";
-
     if (url.startsWith("/ws/ingest")) {
-      ingestWss.handleUpgrade(req, socket, head, (ws) => {
-        ingestWss.emit("connection", ws, req);
-      });
-    } else if (url.startsWith("/ws/dashboard")) {
-      // Require JWT via ?token= query param
+      ingestWss.handleUpgrade(req, socket, head, (ws) => ingestWss.emit("connection", ws, req));
+      return;
+    }
+    if (url.startsWith("/ws/dashboard")) {
       const token = new URL(url, "http://localhost").searchParams.get("token");
-      if (!token) {
-        socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
-        socket.destroy();
-        return;
-      }
-      try {
-        verifyToken(token);
-      } catch {
-        socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
-        socket.destroy();
-        return;
-      }
-      dashboardWss.handleUpgrade(req, socket, head, (ws) => {
-        dashboardWss.emit("connection", ws, req);
-      });
-    } else {
-      socket.destroy();
+      if (!token) { socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n"); socket.destroy(); return; }
+      try { verifyToken(token); } catch { socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n"); socket.destroy(); return; }
+      dashboardWss.handleUpgrade(req, socket, head, (ws) => dashboardWss.emit("connection", ws, req));
+      return;
     }
-  });
+    socket.destroy();
+  };
+  httpServer.on("upgrade", upgradeHandler);
 
-  // ── Throughput Tracker ────────────────────────────────────────────────────
-  let packetsProcessedThisSec = 0;
-
-  // Log once per second throughput and connected dashboard clients
-  setInterval(() => {
-    console.log(
-      `[gateway] Processed ${packetsProcessedThisSec} packets/s | Dashboard clients: ${dashboardClients.size}`
-    );
-    packetsProcessedThisSec = 0;
-
-    // Scan for stale soldiers (> 10s without packets -> SIGNAL LOST)
-    const now = Date.now();
-    const staleAlerts = alertsEngine.checkStaleSoldiers(now);
-    for (const alert of staleAlerts) {
-      broadcastToDashboard({
-        type: "alert",
-        payload: alert,
-      });
-    }
-  }, 1000);
-
-  // ── Ingest connection handler ──────────────────────────────────────────────
   ingestWss.on("connection", (ws) => {
     console.log("[gateway] Simulator/device connected to /ws/ingest");
-
     ws.on("message", (data) => {
-      let raw;
-      try {
-        raw = JSON.parse(data.toString());
-      } catch {
-        return;
-      }
-
-      // 1. Validate with the shared Zod schema
-      const parsed = IngestMessageSchema.safeParse(raw);
-      if (!parsed.success) return;
-
-      // Handle Reference Barometer Station feed from ICP
-      if (parsed.data.type === "reference_station") {
-        const refPkt = parsed.data.payload;
-        latestReferenceStation = refPkt;
-        if (initialReferencePressure === null) {
-          initialReferencePressure = refPkt.pressureHpa;
-        }
-
-        try {
-          db.prepare(`
-            INSERT INTO reference_readings (station_id, pressure_hpa, temperature_c, timestamp)
-            VALUES (?, ?, ?, ?)
-          `).run(
-            refPkt.stationId,
-            refPkt.pressureHpa,
-            refPkt.temperatureC ?? null,
-            refPkt.timestamp
-          );
-        } catch (dbErr) {
-          console.error("[gateway] Failed to store reference reading:", dbErr);
-        }
-
-        broadcastToDashboard({
-          type: "reference_station",
-          payload: refPkt,
-          pressureHpa: refPkt.pressureHpa,
-          timestamp: refPkt.timestamp,
-        });
-        return;
-      }
-
-      // Handle Soldier Telemetry
-      const pkt = parsed.data.payload;
-
-      // 2. Validate telemetry packet physics and detect spoofing/corruption
-      const prevPkt = lastValidPackets.get(pkt.soldierId);
-      const validation = validatePacket(prevPkt, pkt);
-      if (!validation.valid) {
-        console.warn(`[gateway] Rejected packet from ${pkt.soldierId}: ${validation.reason}`);
-        try {
-          db.prepare(`
-            INSERT INTO rejected_packets (soldier_id, reason, raw_payload, timestamp)
-            VALUES (?, ?, ?, ?)
-          `).run(
-            pkt.soldierId || "UNKNOWN",
-            validation.reason || "REJECTED",
-            JSON.stringify(raw),
-            pkt.timestamp || Date.now()
-          );
-        } catch (dbErr) {
-          console.error("[gateway] Failed to log rejected packet:", dbErr);
-        }
-        return; // Drop rejected packet
-      }
-
-      // Valid packet: update memory state with immutable snapshot of raw packet
-      lastValidPackets.set(pkt.soldierId, { ...pkt });
-      packetsProcessedThisSec++;
-
-      // Track soldier's entry baseline reference pressure
-      if (!soldierEntryReferencePressures.has(pkt.soldierId)) {
-        soldierEntryReferencePressures.set(
-          pkt.soldierId,
-          latestReferenceStation?.pressureHpa ?? 1013.25
-        );
-      }
-      const entryRef = soldierEntryReferencePressures.get(pkt.soldierId);
-      const currentRef = latestReferenceStation?.pressureHpa ?? 1013.25;
-
-      // 3. Run differential barometric floor estimation per soldier (P0 from first reading)
-      const estimator = getOrCreateEstimator(pkt.soldierId, pkt.pressureHpa);
-      const estimation = estimator.update(pkt.pressureHpa, pkt.timestamp, {
-        referenceNow: currentRef,
-        referenceAtEntry: entryRef,
+      void handleIngestMessage(data, db).catch((error) => {
+        console.error("[gateway] Failed to process WebSocket message:", error);
       });
-
-      // Also compute uncorrected raw altitude for differential comparison display
-      const uncorrectedAlt = hypsometricAltitude(pkt.pressureHpa, estimator.p0Hpa, estimator.tempC);
-
-      // Query active mission
-      const activeMission = db.prepare("SELECT id FROM missions WHERE status = 'active' ORDER BY started_at DESC LIMIT 1").get();
-      pkt.missionId = activeMission?.id ?? "mission-live";
-
-      // Construct live soldier state
-      const soldierState = {
-        soldierId: pkt.soldierId,
-        teamId: pkt.teamId,
-        x: pkt.x,
-        y: pkt.y,
-        altitude: Math.round(estimation.smoothedAltitude * 100) / 100,
-        rawAltitude: Math.round(uncorrectedAlt * 100) / 100,
-        correctedAltitude: Math.round(estimation.smoothedAltitude * 100) / 100,
-        estimatedFloor: estimation.floor,
-        batteryPct: pkt.batteryPct,
-        timestamp: pkt.timestamp,
-        signal: pkt.signal,
-        seq: pkt.seq,
-        accelMagnitude: pkt.accelMagnitude ?? 1.0,
-      };
-      latestSoldierStates.set(pkt.soldierId, soldierState);
-
-      // Store in SQLite
-      pkt.estimatedFloor = estimation.floor;
-      pkt.altitude = soldierState.altitude;
-      storeTelemetry(db, pkt);
-
-      // Broadcast resulting soldier state as {"type":"telemetry", ...}
-      // Provide both wrapped and top-level properties for versatile client consumption
-      const telemetryMessage = {
-        type: "telemetry",
-        payload: soldierState,
-        ...soldierState,
-      };
-      broadcastToDashboard(telemetryMessage);
-
-      // Run alerts check (floor transition, low battery, man down)
-      const alerts = alertsEngine.processTelemetry(
-        {
-          soldierId: pkt.soldierId,
-          teamId: pkt.teamId,
-          x: pkt.x,
-          y: pkt.y,
-          altitude: soldierState.altitude,
-          accelMagnitude: pkt.accelMagnitude ?? 1.0,
-          batteryPct: pkt.batteryPct,
-          lastSeenAt: pkt.timestamp,
-          floor: estimation.floor,
-        },
-        pkt.timestamp
-      );
-      for (const alert of alerts) {
-        broadcastToDashboard({
-          type: "alert",
-          payload: alert,
-        });
-      }
     });
-
     ws.on("close", () => console.log("[gateway] Simulator/device disconnected from /ws/ingest"));
-    ws.on("error", (e) => console.error("[gateway] Ingest error", e));
+    ws.on("error", (error) => console.error("[gateway] Ingest error", error));
   });
 
-  // ── Dashboard connection handler ───────────────────────────────────────────
   dashboardWss.on("connection", (ws) => {
-    console.log(`[gateway] Dashboard client connected (${dashboardClients.size + 1} active)`);
     dashboardClients.add(ws);
-
-    // Send {"type":"connected"} immediately upon connection
-    safeSend(ws, {
-      type: "connected",
-      serverTime: Date.now(),
-    });
-
-    // 3. Send a {"type":"snapshot"} with all known soldiers when a dashboard client connects
-    const allSoldiers = Array.from(latestSoldierStates.values());
-    safeSend(ws, {
-      type: "snapshot",
-      payload: allSoldiers,
-      soldiers: allSoldiers,
-    });
-
-    // Also send currently active alerts to the new dashboard
-    for (const alert of alertsEngine.getActiveAlerts()) {
-      safeSend(ws, {
-        type: "alert",
-        payload: alert,
-      });
-    }
-
-    // Send latest reference station reading
-    safeSend(ws, {
-      type: "reference_station",
-      payload: latestReferenceStation,
-      pressureHpa: latestReferenceStation.pressureHpa,
-      timestamp: latestReferenceStation.timestamp,
-    });
-
-    ws.on("close", () => {
-      dashboardClients.delete(ws);
-      console.log(`[gateway] Dashboard client disconnected (${dashboardClients.size} active)`);
-    });
-    ws.on("error", (e) => {
-      console.error("[gateway] Dashboard error", e);
-      dashboardClients.delete(ws);
-    });
+    safeSend(ws, { type: "connected", serverTime: Date.now() });
+    const soldiers = Array.from(latestSoldierStates.values());
+    safeSend(ws, { type: "snapshot", payload: soldiers, soldiers });
+    for (const alert of alertsEngine.getActiveAlerts()) safeSend(ws, { type: "alert", payload: alert });
+    safeSend(ws, { type: "reference_station", payload: latestReferenceStation, pressureHpa: latestReferenceStation.pressureHpa, timestamp: latestReferenceStation.timestamp });
+    ws.on("close", () => dashboardClients.delete(ws));
+    ws.on("error", (error) => { console.error("[gateway] Dashboard error", error); dashboardClients.delete(ws); });
   });
 
-  // ── Ping heartbeat every 30 s ─────────────────────────────────────────────
-  setInterval(() => {
-    broadcastToDashboard({ type: "ping", payload: { serverTime: Date.now() } });
-  }, 30_000);
-
+  const throughputTimer = setInterval(() => {
+    console.log(`[gateway] Processed ${packetsProcessedThisSec} packets/s | Dashboard clients: ${dashboardClients.size}`);
+    packetsProcessedThisSec = 0;
+    for (const alert of alertsEngine.checkStaleSoldiers(Date.now())) broadcastToDashboard({ type: "alert", payload: alert });
+  }, 1000);
+  const pingTimer = setInterval(() => broadcastToDashboard({ type: "ping", payload: { serverTime: Date.now() } }), 30_000);
   console.log("[gateway] WebSocket gateway ready (ingest: /ws/ingest, dashboard: /ws/dashboard)");
+  return {
+    close() {
+      clearInterval(throughputTimer);
+      clearInterval(pingTimer);
+      httpServer.off("upgrade", upgradeHandler);
+      for (const client of ingestWss.clients) client.close(1001, "Server shutting down");
+      for (const client of dashboardWss.clients) client.close(1001, "Server shutting down");
+      ingestWss.close();
+      dashboardWss.close();
+    },
+  };
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+async function handleIngestMessage(data, db) {
+  let raw;
+  try { raw = JSON.parse(data.toString()); } catch { return; }
+  const parsed = IngestMessageSchema.safeParse(raw);
+  if (!parsed.success) return;
 
-function storeTelemetry(db, pkt) {
+  if (parsed.data.type === "reference_station") {
+    const packet = parsed.data.payload;
+    await db.query(`INSERT INTO reference_readings(station_id,pressure_hpa,temperature_c,timestamp)
+      VALUES($1,$2,$3,to_timestamp($4/1000.0))`, [packet.stationId,packet.pressureHpa,packet.temperatureC ?? null,packet.timestamp]);
+    latestReferenceStation = packet;
+    if (initialReferencePressure === null) initialReferencePressure = packet.pressureHpa;
+    broadcastToDashboard({ type: "reference_station", payload: packet, pressureHpa: packet.pressureHpa, timestamp: packet.timestamp });
+    return;
+  }
+
+  const packet = parsed.data.payload;
+  const validation = validatePacket(lastValidPackets.get(packet.soldierId), packet);
+  if (!validation.valid) {
+    console.warn(`[gateway] Rejected packet from ${packet.soldierId}: ${validation.reason}`);
+    await db.query(`INSERT INTO rejected_packets(soldier_id,reason,raw_payload,timestamp)
+      VALUES($1,$2,$3::jsonb,to_timestamp($4/1000.0))`,
+    [packet.soldierId || "UNKNOWN",validation.reason || "REJECTED",JSON.stringify(raw),packet.timestamp || Date.now()]);
+    return;
+  }
+
+  const { rows: [mission] } = await db.query("SELECT id FROM missions WHERE status='active' ORDER BY started_at DESC LIMIT 1");
+  if (!mission) throw new Error("No active mission exists; telemetry was not stored.");
+  if (!soldierEntryReferencePressures.has(packet.soldierId)) {
+    soldierEntryReferencePressures.set(packet.soldierId, latestReferenceStation?.pressureHpa ?? 1013.25);
+  }
+  const estimator = getOrCreateEstimator(packet.soldierId, packet.pressureHpa);
+  const estimate = estimator.update(packet.pressureHpa, packet.timestamp, {
+    referenceNow: latestReferenceStation?.pressureHpa ?? 1013.25,
+    referenceAtEntry: soldierEntryReferencePressures.get(packet.soldierId),
+  });
+  const rawAltitude = hypsometricAltitude(packet.pressureHpa, estimator.p0Hpa, estimator.tempC);
+  const soldierState = {
+    soldierId: packet.soldierId, teamId: packet.teamId, x: packet.x, y: packet.y,
+    altitude: Math.round(estimate.smoothedAltitude * 100) / 100,
+    rawAltitude: Math.round(rawAltitude * 100) / 100,
+    correctedAltitude: Math.round(estimate.smoothedAltitude * 100) / 100,
+    estimatedFloor: estimate.floor, batteryPct: packet.batteryPct,
+    timestamp: packet.timestamp, signal: packet.signal, seq: packet.seq,
+    accelMagnitude: packet.accelMagnitude ?? 1.0,
+  };
+  const storedPacket = { ...packet, missionId: mission.id, estimatedFloor: estimate.floor, altitude: soldierState.altitude };
+  await storeTelemetry(db, storedPacket);
+  lastValidPackets.set(packet.soldierId, storedPacket);
+  latestSoldierStates.set(packet.soldierId, soldierState);
+  packetsProcessedThisSec++;
+  broadcastToDashboard({ type: "telemetry", payload: soldierState, ...soldierState });
+  const alerts = alertsEngine.processTelemetry({
+    soldierId: packet.soldierId, teamId: packet.teamId, x: packet.x, y: packet.y,
+    altitude: soldierState.altitude, accelMagnitude: packet.accelMagnitude ?? 1.0,
+    batteryPct: packet.batteryPct, lastSeenAt: packet.timestamp, floor: estimate.floor,
+  }, packet.timestamp);
+  for (const alert of alerts) broadcastToDashboard({ type: "alert", payload: alert });
+}
+
+async function storeTelemetry(db, packet) {
+  const client = await db.connect();
   try {
-    db.prepare(`
-      INSERT INTO telemetry
-        (soldier_id, team_id, seq, ts, x, y, pressure_hpa, battery_pct, signal, floor, mission_id, altitude, accel_magnitude)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      pkt.soldierId,
-      pkt.teamId,
-      pkt.seq,
-      pkt.timestamp,
-      pkt.x,
-      pkt.y,
-      pkt.pressureHpa,
-      pkt.batteryPct,
-      pkt.signal,
-      pkt.estimatedFloor ?? null,
-      pkt.missionId ?? null,
-      pkt.altitude ?? null,
-      pkt.accelMagnitude ?? 1.0
-    );
-  } catch (err) {
-    console.error("[gateway] SQLite insert error:", err);
+    await client.query("BEGIN");
+    await client.query("INSERT INTO teams(id,name) VALUES($1,$1) ON CONFLICT(id) DO NOTHING", [packet.teamId]);
+    await client.query("INSERT INTO soldiers(id,name) VALUES($1,$1) ON CONFLICT(id) DO NOTHING", [packet.soldierId]);
+    await client.query(`INSERT INTO mission_soldiers(mission_id,soldier_id,team_id)
+      VALUES($1,$2,$3) ON CONFLICT(mission_id,soldier_id) DO NOTHING`, [packet.missionId,packet.soldierId,packet.teamId]);
+    await client.query(`INSERT INTO telemetry(mission_id,soldier_id,team_id,seq,timestamp,x,y,altitude,floor,
+      pressure_hpa,battery_pct,signal_strength,sensor_metadata)
+      VALUES($1,$2,$3,$4,to_timestamp($5/1000.0),$6,$7,$8,$9,$10,$11,$12,$13::jsonb)`,
+    [packet.missionId,packet.soldierId,packet.teamId,packet.seq,packet.timestamp,packet.x,packet.y,
+      packet.altitude ?? null,packet.estimatedFloor ?? null,packet.pressureHpa,packet.batteryPct,packet.signal,
+      JSON.stringify({ accelMagnitude: packet.accelMagnitude ?? 1.0 })]);
+    await client.query("COMMIT");
+    return true;
+  } catch (error) {
+    await client.query("ROLLBACK");
+    console.error("[gateway] PostgreSQL telemetry transaction failed:", error);
+    return false;
+  } finally {
+    client.release();
   }
 }
 
-function broadcastToDashboard(msg) {
-  const text = JSON.stringify(msg);
-  for (const client of dashboardClients) {
-    safeSend(client, msg, text);
-  }
+function broadcastToDashboard(message) {
+  const text = JSON.stringify(message);
+  for (const client of dashboardClients) safeSend(client, message, text);
 }
 
-function safeSend(ws, msg, cached) {
-  if (ws.readyState === WebSocket.OPEN) {
-    ws.send(cached ?? JSON.stringify(msg));
-  }
+function safeSend(client, message, cached) {
+  if (client.readyState === WebSocket.OPEN) client.send(cached ?? JSON.stringify(message));
 }
