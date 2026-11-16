@@ -8,6 +8,7 @@ export default function MissionAnalytics({
   missionsError,
   selectedMissionId,
   onSelectMission,
+  authToken,
 }) {
   const [analytics, setAnalytics] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -55,6 +56,7 @@ export default function MissionAnalytics({
 
     fetch(`/api/missions/${encodeURIComponent(selectedMissionId)}/analytics`, {
       signal: controller.signal,
+      headers: { Authorization: `Bearer ${authToken}` },
     })
       .then(async (response) => {
         const body = await response.json().catch(() => ({}));
@@ -74,7 +76,7 @@ export default function MissionAnalytics({
       });
 
     return () => controller.abort();
-  }, [selectedMissionId, missionsLoading, missionsError]);
+  }, [selectedMissionId, missionsLoading, missionsError, authToken]);
 
   const floorTotals = useMemo(() => {
     const totals = new Map();

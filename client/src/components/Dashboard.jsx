@@ -56,7 +56,9 @@ export default function Dashboard({ auth, onLogout }) {
 
   // ── Fetch Calibration on Start ──────────────────────────────────────────────
   useEffect(() => {
-    fetch("/api/calibration")
+    fetch("/api/calibration", {
+      headers: { Authorization: `Bearer ${auth.token}` },
+    })
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
         if (data && data.translation && data.rotation && data.scale) {
@@ -68,7 +70,7 @@ export default function Dashboard({ auth, onLogout }) {
         }
       })
       .catch((err) => console.warn("[dashboard] Calibration fetch error:", err));
-  }, []);
+  }, [auth.token]);
 
   const handleSaveCalibration = async () => {
     const res = await fetch("/api/calibration", {
@@ -218,7 +220,9 @@ export default function Dashboard({ auth, onLogout }) {
     setMissionsLoading(true);
     setMissionsError("");
     try {
-      const res = await fetch("/api/missions");
+      const res = await fetch("/api/missions", {
+        headers: { Authorization: `Bearer ${auth.token}` },
+      });
       if (!res.ok) throw new Error("Failed to load missions");
       const data = await res.json();
       setMissions(data);
@@ -231,7 +235,7 @@ export default function Dashboard({ auth, onLogout }) {
     } finally {
       setMissionsLoading(false);
     }
-  }, []);
+  }, [auth.token]);
 
   useEffect(() => {
     if (mode === "replay" || mode === "analytics") {
@@ -243,7 +247,9 @@ export default function Dashboard({ auth, onLogout }) {
   useEffect(() => {
     if (mode !== "replay" || !selectedMissionId) return;
 
-    fetch(`/api/missions/${encodeURIComponent(selectedMissionId)}/telemetry`)
+    fetch(`/api/missions/${encodeURIComponent(selectedMissionId)}/telemetry`, {
+      headers: { Authorization: `Bearer ${auth.token}` },
+    })
       .then((res) => (res.ok ? res.json() : []))
       .then((packets) => {
         setReplayPackets(packets);
@@ -259,7 +265,7 @@ export default function Dashboard({ auth, onLogout }) {
         setIsPlaying(false);
       })
       .catch((err) => console.error("[dashboard] Failed to load replay telemetry:", err));
-  }, [mode, selectedMissionId]);
+  }, [mode, selectedMissionId, auth.token]);
 
   // Replay playback timer
   useEffect(() => {
@@ -541,6 +547,7 @@ export default function Dashboard({ auth, onLogout }) {
               missionsError={missionsError}
               selectedMissionId={selectedMissionId}
               onSelectMission={setSelectedMissionId}
+              authToken={auth.token}
             />
           </main>
         ) : (

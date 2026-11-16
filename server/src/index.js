@@ -3,6 +3,7 @@ import { createApp } from "./app.js";
 import { createDatabase, initializeDatabase, seedUsers } from "./db.js";
 import { createWebSocketGateway } from "./gateway.js";
 import { createServer } from "http";
+import { restoreCalibration } from "./calibration-state.js";
 
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
 
@@ -13,6 +14,7 @@ let gateway;
 try {
   await initializeDatabase(db);
   await seedUsers(db);
+  await restoreCalibration(db);
   const app = createApp(db);
   httpServer = createServer(app);
   gateway = await createWebSocketGateway(httpServer, db);

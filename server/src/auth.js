@@ -5,7 +5,7 @@ import { LoginRequestSchema, LoginResponseSchema } from "@hit-tracker/shared";
 const JWT_SECRET = process.env.JWT_SECRET ?? "dev_secret";
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN ?? "8h";
 
-export function loginHandler(req, res, db) {
+export async function loginHandler(req, res, db) {
   const parsed = LoginRequestSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "Invalid request", details: parsed.error.flatten() });
@@ -14,7 +14,7 @@ export function loginHandler(req, res, db) {
 
   const { username, password } = parsed.data;
 
-  const user = db.prepare("SELECT * FROM users WHERE username = ?").get(username);
+  const { rows: [user] } = await db.query("SELECT * FROM users WHERE username = $1", [username]);
 
   if (!user || !bcrypt.compareSync(password, user.password_hash)) {
     res.status(401).json({ error: "Invalid credentials" });

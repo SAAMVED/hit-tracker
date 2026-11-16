@@ -1,88 +1,59 @@
 import assert from "node:assert/strict";
 import bcrypt from "bcryptjs";
-import Database from "better-sqlite3";
-import { after, before, test } from "node:test";
+import { test } from "node:test";
 import { loginHandler, verifyToken } from "../src/auth.js";
-import { seedUsers } from "../src/db.js";
 
-const TEST_COMMANDER_PASSWORD = "test-commander-password";
-const TEST_VIEWER_PASSWORD = "test-viewer-password";
-let db;
-
-before(() => {
-  db = new Database(":memory:");
-  db.exec(`
-    CREATE TABLE users (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      username TEXT NOT NULL UNIQUE,
-      password_hash TEXT NOT NULL,
-      role TEXT NOT NULL CHECK(role IN ('commander', 'viewer')),
-      created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
-    );
-  `);
-
-  const originalCommanderPassword = process.env.COMMANDER_PASSWORD;
-  const originalViewerPassword = process.env.VIEWER_PASSWORD;
-  process.env.COMMANDER_PASSWORD = TEST_COMMANDER_PASSWORD;
-  process.env.VIEWER_PASSWORD = TEST_VIEWER_PASSWORD;
-  try {
-    seedUsers(db);
-  } finally {
-    if (originalCommanderPassword === undefined) delete process.env.COMMANDER_PASSWORD;
-    else process.env.COMMANDER_PASSWORD = originalCommanderPassword;
-    if (originalViewerPassword === undefined) delete process.env.VIEWER_PASSWORD;
-    else process.env.VIEWER_PASSWORD = originalViewerPassword;
-  }
-});
-
-after(() => db.close());
+const commanderHash = bcrypt.hashSync("test-commander-password", 4);
+const viewerHash = bcrypt.hashSync("test-viewer-password", 4);
+const users = new Map([
+  ["commander", { username: "commander", password_hash: commanderHash, role: "commander" }],
+  ["viewer", { username: "viewer", password_hash: viewerHash, role: "viewer" }],
+]);
 
 function invokeLogin(body) {
+  const calls = [];
+  const db = {
+    async query(sql, params) {
+      calls.push({ sql, params });
+      return { rows: [users.get(params[0])].filter(Boolean) };
+    },
+  };
   const response = {
     statusCode: 200,
     body: undefined,
-    status(code) {
-      this.statusCode = code;
-      return this;
-    },
-    json(value) {
-      this.body = value;
-      return this;
-    },
+    status(code) { this.statusCode = code; return this; },
+    json(value) { this.body = value; return this; },
   };
-
-  loginHandler({ body }, response, db);
-  return response;
+  return loginHandler({ body }, response, db).then(() => ({ response, calls }));
 }
 
-test("accepts the seeded Commander credentials and returns a Commander token", () => {
-  const storedUser = db.prepare("SELECT * FROM users WHERE username = ?").get("commander");
-  assert.ok(storedUser);
-  assert.notEqual(storedUser.password_hash, TEST_COMMANDER_PASSWORD);
-  assert.equal(bcrypt.compareSync(TEST_COMMANDER_PASSWORD, storedUser.password_hash), true);
-
-  const response = invokeLogin({ username: "commander", password: TEST_COMMANDER_PASSWORD });
+test("validates Commander login through a parameterized PostgreSQL query", async () => {
+  const { response, calls } = await invokeLogin({ username: "commander", password: "test-commander-password" });
+  assert.notEqual(commanderHash, "test-commander-password");
   assert.equal(response.statusCode, 200);
   assert.equal(response.body.role, "commander");
   assert.ok(response.body.expiresAt > Date.now());
   assert.equal(verifyToken(response.body.token).role, "commander");
+  assert.deepEqual(calls[0].params, ["commander"]);
+  assert.match(calls[0].sql, /username\s*=\s*\$1/);
 });
 
-test("keeps backend-validated read-only personnel login available", () => {
-  const response = invokeLogin({ username: "viewer", password: TEST_VIEWER_PASSWORD });
+test("keeps Viewer credentials backend validated", async () => {
+  const { response } = await invokeLogin({ username: "viewer", password: "test-viewer-password" });
   assert.equal(response.statusCode, 200);
   assert.equal(response.body.role, "viewer");
   assert.equal(verifyToken(response.body.token).role, "viewer");
 });
 
-test("rejects an incorrect password", () => {
-  const response = invokeLogin({ username: "commander", password: "incorrect-password" });
+test("rejects an incorrect password", async () => {
+  const { response } = await invokeLogin({ username: "commander", password: "incorrect-password" });
   assert.equal(response.statusCode, 401);
   assert.deepEqual(response.body, { error: "Invalid credentials" });
 });
 
-test("rejects an invalid login request", () => {
-  const response = invokeLogin({ username: "", password: "" });
+test("rejects an invalid login request", async () => {
+  const { response, calls } = await invokeLogin({ username: "", password: "" });
   assert.equal(response.statusCode, 400);
   assert.equal(response.body.error, "Invalid request");
+  assert.equal(calls.length, 0);
 });

@@ -6,6 +6,7 @@ import { loginHandler, verifyToken } from "./auth.js";
 import { CalibrationSchema, calculateMissionAnalytics } from "@hit-tracker/shared";
 import { alertsEngine } from "./alerts-state.js";
 import { acknowledgePersistedAlert, resolvePersistedAlert } from "./alert-store.js";
+import { getCalibrationResponse, setCurrentCalibration } from "./calibration-state.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -50,6 +51,7 @@ export function createApp(db) {
     }
     next();
   }
+  const asyncRoute = (handler) => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
 
   // ── Routes ───────────────────────────────────────────────────────────────────
 
@@ -81,30 +83,17 @@ export function createApp(db) {
     });
   });
 
-  app.post("/api/login", (req, res) => {
-    loginHandler(req, res, db);
-  });
+  app.post("/api/login", asyncRoute(async (req, res) => {
+    await loginHandler(req, res, db);
+  }));
 
   // ── Model Calibration ───────────────────────────────────────────────────────
 
-  app.get("/api/calibration", (_req, res) => {
-    const row = db.prepare("SELECT * FROM calibration WHERE id = 'default'").get();
-    if (!row) {
-      return res.json({
-        translation: { x: 0, y: 0, z: 0 },
-        rotation: { x: 0, y: 0, z: 0 },
-        scale: { x: 1, y: 1, z: 1 },
-      });
-    }
-    res.json({
-      translation: { x: row.translation_x, y: row.translation_y, z: row.translation_z },
-      rotation: { x: row.rotation_x, y: row.rotation_y, z: row.rotation_z },
-      scale: { x: row.scale_x, y: row.scale_y, z: row.scale_z },
-      updatedAt: row.updated_at,
-    });
-  });
+  app.get("/api/calibration", authenticate, asyncRoute(async (_req, res) => {
+    res.json(getCalibrationResponse());
+  }));
 
-  app.post("/api/calibration", authenticate, requireCommander, (req, res) => {
+  app.post("/api/calibration", authenticate, requireCommander, asyncRoute(async (req, res) => {
     const parsed = CalibrationSchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({ error: "Invalid calibration data", details: parsed.error.flatten() });
@@ -113,29 +102,45 @@ export function createApp(db) {
     const { translation, rotation, scale } = parsed.data;
     const now = Date.now();
 
-    db.prepare(`
-      INSERT INTO calibration (id, translation_x, translation_y, translation_z, rotation_x, rotation_y, rotation_z, scale_x, scale_y, scale_z, updated_at)
-      VALUES ('default', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET
-        translation_x=excluded.translation_x,
-        translation_y=excluded.translation_y,
-        translation_z=excluded.translation_z,
-        rotation_x=excluded.rotation_x,
-        rotation_y=excluded.rotation_y,
-        rotation_z=excluded.rotation_z,
-        scale_x=excluded.scale_x,
-        scale_y=excluded.scale_y,
-        scale_z=excluded.scale_z,
-        updated_at=excluded.updated_at
-    `).run(
-      translation.x, translation.y, translation.z,
-      rotation.x, rotation.y, rotation.z,
-      scale.x, scale.y, scale.z,
-      now
-    );
+    const client = await db.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(`
+        INSERT INTO calibration
+          (id,translation_x,translation_y,translation_z,rotation_x,rotation_y,rotation_z,scale_x,scale_y,scale_z,updated_at,calibrated_by)
+        VALUES ('default',$1,$2,$3,$4,$5,$6,$7,$8,$9,to_timestamp($10/1000.0),$11)
+        ON CONFLICT(id) DO UPDATE SET
+          translation_x=excluded.translation_x,translation_y=excluded.translation_y,translation_z=excluded.translation_z,
+          rotation_x=excluded.rotation_x,rotation_y=excluded.rotation_y,rotation_z=excluded.rotation_z,
+          scale_x=excluded.scale_x,scale_y=excluded.scale_y,scale_z=excluded.scale_z,
+          updated_at=excluded.updated_at,calibrated_by=excluded.calibrated_by
+      `, [
+        translation.x, translation.y, translation.z,
+        rotation.x, rotation.y, rotation.z,
+        scale.x, scale.y, scale.z,
+        now, req.user.sub,
+      ]);
+      await client.query(`
+        INSERT INTO calibration_history
+          (calibration_id,translation_x,translation_y,translation_z,rotation_x,rotation_y,rotation_z,scale_x,scale_y,scale_z,changed_at,changed_by)
+        VALUES ('default',$1,$2,$3,$4,$5,$6,$7,$8,$9,to_timestamp($10/1000.0),$11)
+      `, [
+        translation.x, translation.y, translation.z,
+        rotation.x, rotation.y, rotation.z,
+        scale.x, scale.y, scale.z,
+        now, req.user.sub,
+      ]);
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
 
+    setCurrentCalibration({ translation, rotation, scale }, now);
     res.json({ translation, rotation, scale, updatedAt: now });
-  });
+  }));
 
   // ── Model Upload (Commander Only) ──────────────────────────────────────────
 
@@ -161,23 +166,43 @@ export function createApp(db) {
 
   // ── Missions & Replay ───────────────────────────────────────────────────────
 
-  app.get("/api/missions", (_req, res) => {
-    const rows = db.prepare(`
-      SELECT m.id, m.name, m.started_at as startedAt, m.ended_at as endedAt, m.status, m.created_at as createdAt,
-             COUNT(t.id) as packetCount,
-             MIN(t.ts) as minTs,
-             MAX(t.ts) as maxTs
-      FROM missions m
-      LEFT JOIN telemetry t ON t.mission_id = m.id
-      GROUP BY m.id
-      ORDER BY m.started_at DESC
-    `).all();
-    res.json(rows);
+  const missionSummariesQuery = `
+    SELECT m.id,m.name,(extract(epoch from m.started_at)*1000)::bigint AS "startedAt",
+      (extract(epoch from m.ended_at)*1000)::bigint AS "endedAt",m.status,
+      (extract(epoch from m.created_at)*1000)::bigint AS "createdAt",COUNT(t.id)::int AS "packetCount",
+      (extract(epoch from MIN(t.timestamp))*1000)::bigint AS "minTs",
+      (extract(epoch from MAX(t.timestamp))*1000)::bigint AS "maxTs"
+    FROM missions m LEFT JOIN telemetry t ON t.mission_id=m.id
+  `;
+  const toMissionSummary = (row) => ({
+    ...row,
+    startedAt: Number(row.startedAt),
+    endedAt: row.endedAt == null ? null : Number(row.endedAt),
+    createdAt: Number(row.createdAt),
+    packetCount: Number(row.packetCount),
+    minTs: row.minTs == null ? null : Number(row.minTs),
+    maxTs: row.maxTs == null ? null : Number(row.maxTs),
   });
 
-  app.post("/api/missions", authenticate, requireCommander, (req, res) => {
-    const { name } = req.body;
-    if (!name || typeof name !== "string") {
+  app.get("/api/missions", authenticate, asyncRoute(async (_req, res) => {
+    const { rows } = await db.query(`
+      ${missionSummariesQuery}
+      GROUP BY m.id ORDER BY m.started_at DESC,m.id
+    `);
+    res.json(rows.map(toMissionSummary));
+  }));
+
+  app.get("/api/missions/:id", authenticate, asyncRoute(async (req, res) => {
+    const { rows: [row] } = await db.query(`
+      ${missionSummariesQuery} WHERE m.id=$1 GROUP BY m.id
+    `, [req.params.id]);
+    if (!row) return res.status(404).json({ error: "Mission not found" });
+    res.json(toMissionSummary(row));
+  }));
+
+  app.post("/api/missions", authenticate, requireCommander, asyncRoute(async (req, res) => {
+    const name = req.body?.name;
+    if (typeof name !== "string" || !name.trim()) {
       return res.status(400).json({ error: "Mission name is required" });
     }
 
@@ -185,92 +210,128 @@ export function createApp(db) {
     const id = `mission-${now}`;
 
     // End previous active mission
-    db.prepare("UPDATE missions SET status = 'completed', ended_at = ? WHERE status = 'active'").run(now);
-
-    // Insert new mission
-    db.prepare(`
-      INSERT INTO missions (id, name, started_at, status, created_at)
-      VALUES (?, ?, ?, 'active', ?)
-    `).run(id, name.trim(), now, now);
+    const client = await db.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("LOCK TABLE missions IN EXCLUSIVE MODE");
+      await client.query("UPDATE missions SET status='completed',ended_at=to_timestamp($1/1000.0) WHERE status='active'", [now]);
+      await client.query("INSERT INTO missions(id,name,started_at,status,created_at) VALUES($1,$2,to_timestamp($3/1000.0),'active',to_timestamp($3/1000.0))", [id,name.trim(),now]);
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
 
     res.json({ id, name: name.trim(), startedAt: now, status: "active" });
-  });
+  }));
 
-  app.post("/api/missions/:id/end", authenticate, requireCommander, (req, res) => {
+  app.post("/api/missions/:id/end", authenticate, requireCommander, asyncRoute(async (req, res) => {
     const { id } = req.params;
     const now = Date.now();
-    const result = db.prepare("UPDATE missions SET status = 'completed', ended_at = ? WHERE id = ?").run(now, id);
-    if (result.changes === 0) {
+    const result = await db.query("UPDATE missions SET status='completed',ended_at=to_timestamp($1/1000.0) WHERE id=$2 RETURNING id", [now,id]);
+    if (result.rowCount === 0) {
       return res.status(404).json({ error: "Mission not found" });
     }
     res.json({ ok: true, id, endedAt: now });
-  });
+  }));
 
-  app.get("/api/missions/:id/analytics", (req, res) => {
+  app.get("/api/missions/:id/analytics", authenticate, asyncRoute(async (req, res) => {
     const asOf = Date.now();
-    const row = db.prepare(`
-      SELECT id, name, started_at, ended_at, status
+    const { rows: [row] } = await db.query(`
+      SELECT id, name, (extract(epoch from started_at)*1000)::bigint as started_at, (extract(epoch from ended_at)*1000)::bigint as ended_at, status
       FROM missions
-      WHERE id = ?
-    `).get(req.params.id);
+      WHERE id = $1
+    `, [req.params.id]);
 
     if (!row) {
       return res.status(404).json({ error: "Mission not found" });
     }
 
-    const telemetryRows = db.prepare(`
-      SELECT soldier_id, team_id, ts, x, y, floor
+    const { rows: telemetryRows } = await db.query(`
+      SELECT soldier_id, team_id, (extract(epoch from timestamp)*1000)::bigint as ts, x, y, floor
       FROM telemetry
-      WHERE mission_id = ?
-      ORDER BY soldier_id ASC, ts ASC, id ASC
-    `).all(req.params.id);
+      WHERE mission_id = $1
+      ORDER BY soldier_id ASC, timestamp ASC, id ASC
+    `, [req.params.id]);
 
     const mission = {
       id: row.id,
       name: row.name,
-      startedAt: row.started_at,
-      endedAt: row.ended_at,
+      startedAt: Number(row.started_at),
+      endedAt: row.ended_at == null ? null : Number(row.ended_at),
       status: row.status,
     };
     const telemetry = telemetryRows.map((telemetryRow) => ({
       soldierId: telemetryRow.soldier_id,
       teamId: telemetryRow.team_id,
-      timestamp: telemetryRow.ts,
+      timestamp: Number(telemetryRow.ts),
       x: telemetryRow.x,
       y: telemetryRow.y,
       estimatedFloor: telemetryRow.floor,
     }));
 
     res.json(calculateMissionAnalytics({ mission, telemetry, asOf }));
-  });
+  }));
 
-  app.get("/api/missions/:id/telemetry", (req, res) => {
+  app.get("/api/missions/:id/telemetry", authenticate, asyncRoute(async (req, res) => {
     const { id } = req.params;
-    const { from, to, limit } = req.query;
+    const { from, to, limit, soldierId } = req.query;
 
-    let query = "SELECT soldier_id, team_id, seq, ts, x, y, pressure_hpa, battery_pct, signal, floor, altitude, accel_magnitude FROM telemetry WHERE mission_id = ?";
+    const { rowCount: missionCount } = await db.query("SELECT 1 FROM missions WHERE id=$1", [id]);
+    if (missionCount === 0) return res.status(404).json({ error: "Mission not found" });
+
+    const timeBounds = {};
+    for (const [key, value] of [["from", from], ["to", to]]) {
+      if (value === undefined) continue;
+      const milliseconds = Number(value);
+      if (!Number.isFinite(milliseconds)) return res.status(400).json({ error: `Invalid ${key} timestamp` });
+      timeBounds[key] = new Date(milliseconds);
+    }
+    if (timeBounds.from && timeBounds.to && timeBounds.from > timeBounds.to) {
+      return res.status(400).json({ error: "from must not be later than to" });
+    }
+    let parsedLimit;
+    if (limit !== undefined) {
+      parsedLimit = Number(limit);
+      if (!Number.isInteger(parsedLimit) || parsedLimit < 0 || parsedLimit > 100000) {
+        return res.status(400).json({ error: "Invalid limit" });
+      }
+    }
+
+    let query = `SELECT soldier_id,team_id,seq,(extract(epoch from timestamp)*1000)::bigint AS ts,
+      x,y,pressure_hpa,battery_pct,signal_strength AS signal,floor,altitude,
+      sensor_metadata->>'accelMagnitude' AS accel_magnitude
+      FROM telemetry WHERE mission_id=$1`;
     const params = [id];
 
-    if (from) {
-      query += " AND ts >= ?";
-      params.push(Number(from));
-    }
-    if (to) {
-      query += " AND ts <= ?";
-      params.push(Number(to));
-    }
-    query += " ORDER BY ts ASC";
-    if (limit) {
-      query += " LIMIT ?";
-      params.push(Number(limit));
+    if (soldierId !== undefined) {
+      if (typeof soldierId !== "string" || !soldierId) return res.status(400).json({ error: "Invalid soldierId" });
+      params.push(soldierId);
+      query += ` AND soldier_id=$${params.length}`;
     }
 
-    const rows = db.prepare(query).all(...params);
+    if (timeBounds.from) {
+      params.push(timeBounds.from);
+      query += ` AND timestamp >= $${params.length}`;
+    }
+    if (timeBounds.to) {
+      params.push(timeBounds.to);
+      query += ` AND timestamp <= $${params.length}`;
+    }
+    query += " ORDER BY timestamp ASC,id ASC";
+    if (parsedLimit !== undefined) {
+      query += ` LIMIT $${params.length + 1}`;
+      params.push(parsedLimit);
+    }
+
+    const { rows } = await db.query(query, params);
     const packets = rows.map((r) => ({
       soldierId: r.soldier_id,
       teamId: r.team_id,
-      seq: r.seq,
-      timestamp: r.ts,
+      seq: Number(r.seq),
+      timestamp: Number(r.ts),
       x: r.x,
       y: r.y,
       pressureHpa: r.pressure_hpa,
@@ -278,31 +339,38 @@ export function createApp(db) {
       signal: r.signal,
       estimatedFloor: r.floor,
       altitude: r.altitude,
-      accelMagnitude: r.accel_magnitude,
+      accelMagnitude: r.accel_magnitude != null && Number.isFinite(Number(r.accel_magnitude))
+        ? Number(r.accel_magnitude)
+        : 1.0,
     }));
 
     res.json(packets);
-  });
+  }));
 
   // ── Security Audit (Rejected Packets) ───────────────────────────────────────
 
-  app.get("/api/audit/rejected", authenticate, requireCommander, (_req, res) => {
-    const rows = db.prepare(`
+  app.get("/api/audit/rejected", authenticate, requireCommander, asyncRoute(async (_req, res) => {
+    const { rows } = await db.query(`
       SELECT id, soldier_id, reason, raw_payload, timestamp
       FROM rejected_packets
       ORDER BY timestamp DESC
       LIMIT 100
-    `).all();
+    `);
 
     const auditEntries = rows.map((r) => ({
       id: r.id,
       soldierId: r.soldier_id,
       reason: r.reason,
       rawPayload: r.raw_payload,
-      timestamp: r.timestamp,
+      timestamp: new Date(r.timestamp).getTime(),
     }));
 
     res.json(auditEntries);
+  }));
+
+  app.use((error, _req, res, _next) => {
+    console.error("[api] Database/request error:", error.message);
+    res.status(500).json({ error: "Internal server error" });
   });
 
   // 404 fallback
