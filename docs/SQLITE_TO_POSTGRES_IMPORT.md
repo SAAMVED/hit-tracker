@@ -28,4 +28,6 @@ Telemetry is inserted in parameterized batches. The importer compares exact sour
 
 `calibration_history`, `building_models`, and `mission_events` have no corresponding legacy SQLite tables or data and are not populated by this importer. New values for those features must come from their application workflows; the importer does not synthesize them.
 
-This repository change only prepares and statically checks the importer. The commands above have not been run as part of this change.
+The importer integration test uses a temporary synthetic SQLite fixture and an isolated schema in `hit_tracker_test`; it verifies row preservation, explicit reporting of invalid rows, and duplicate-import rejection. That test does not import the original project database. Run the command above separately only after verifying the source path and PostgreSQL destination.
+
+The importer depends on `better-sqlite3`, which is a server development dependency rather than a production runtime dependency. Install the repository's development dependencies with `npm install` before running the one-time import utility. A production installation may omit development dependencies after the import is complete.

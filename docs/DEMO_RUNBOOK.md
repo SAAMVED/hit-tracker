@@ -6,7 +6,7 @@ This runbook demonstrates the current simulator, live dashboard, Replay view, an
 
 1. From the repository root, install dependencies if needed with `npm install`.
 2. Configure the local environment as described in the [README Quick Start](../README.md#quick-start).
-3. Ensure the server's local SQLite database contains at least one mission with telemetry if you plan to demonstrate Replay and Analytics. The demo does not create a mission automatically.
+3. Ensure the configured PostgreSQL database has a mission with telemetry if you plan to demonstrate Replay and Analytics. Use the documented SQLite importer if the legacy SQLite database contains the demo records; the demo does not create a mission automatically.
 
 ## Start with synthetic weather drift
 

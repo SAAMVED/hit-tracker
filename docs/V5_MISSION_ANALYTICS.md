@@ -124,7 +124,7 @@ Durations are displayed as hours/minutes or minutes/seconds, and distance is dis
 
 ## Tests and verification
 
-The implementation has shared calculation tests and backend route tests. The backend tests use an isolated in-memory SQLite database and cover a successful report, unknown mission response, mission-specific telemetry filtering, the active mission boundary, and the completed mission boundary.
+The implementation has shared calculation tests and PostgreSQL backend integration tests. Backend tests connect only to the dedicated `hit_tracker_test` database and create uniquely named temporary schemas that are dropped after each test file. Mission analytics coverage includes a successful report, unknown mission response, mission-scoped telemetry filtering, and the active and completed mission boundaries. The wider backend suite also checks PostgreSQL migrations, constraints, authentication, gateway persistence, calibration, alerts, and the one-time SQLite importer fixture.
 
 Commands run for V5 analytics verification:
 
@@ -135,7 +135,7 @@ npm run build
 git diff --check
 ```
 
-`npm test` runs the shared Vitest suite (108 tests). `npm test --workspace server` runs the backend Node test suite (4 tests). The build runs the client Vite production build; Vite currently reports a large JavaScript bundle warning.
+`npm test` runs the shared Vitest suite (108 tests). `npm test --workspace server` runs the backend Node test suite (17 tests). The build runs the client Vite production build; Vite currently reports a large JavaScript bundle warning.
 
 ## Limitations and assumptions
 

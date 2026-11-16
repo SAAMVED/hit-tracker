@@ -1,21 +1,21 @@
 # Architecture Decision Records
 
-## ADR-001: Offline-First with SQLite
+## ADR-001: Offline-First with SQLite (Historical)
 
-**Status:** Accepted  
+**Status:** Superseded for persistence by the PostgreSQL migration
 **Date:** 2024-11-14
 
 ### Context
 HIT-Tracker is deployed in forward operating environments with no internet access. The system must operate completely offline.
 
 ### Decision
-- SQLite (via better-sqlite3) for all persistence – no external DB needed.
+- The original implementation used SQLite (via better-sqlite3) for persistence.
 - WebSocket (ws) for real-time telemetry – no MQTT broker.
 - JWT (jsonwebtoken + bcryptjs) for auth stored locally.
 - All npm packages bundled at install time, no CDN references.
 
 ### Consequences
-- Simple deployment: single Node process + SQLite file.
+- The original design kept persistence in a local SQLite file. The current backend requires PostgreSQL; SQLite is retained only as an optional one-time import source.
 - No horizontal scaling (acceptable for single-ICP use case).
 
 ---

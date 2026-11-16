@@ -9,7 +9,7 @@ A Task Force Commander at the Integrated Command Post (ICP) tracks House Interve
 ```
 monorepo (npm workspaces)
 ├── shared/      – Zod schemas, barometric estimation, Vitest tests
-├── server/      – Node 20 + Express + SQLite + WebSocket gateway + JWT auth
+├── server/      – Node 20 + Express + PostgreSQL + WebSocket gateway + JWT auth
 ├── client/      – React + Vite + Tailwind + @react-three/fiber + drei
 ├── simulator/   – 16-soldier, 4-team telemetry simulator (1 Hz)
 └── docs/        – Architecture notes and ADRs
@@ -21,16 +21,21 @@ monorepo (npm workspaces)
 # 1. Install dependencies
 npm install
 
-# 2. Configure environment
-cp .env.example .env
-# Edit .env with your secrets
+# 2. Configure the backend environment
+cp .env.example server/.env
+# Set DATABASE_URL to your PostgreSQL database and replace the auth placeholders
 
-# 3. Start everything (server + client dev + simulator)
+# 3. Apply the PostgreSQL schema
+npm run db:migrate --workspace server
+
+# 4. Start everything (server + client dev + simulator)
 npm start
 
-# 4. Open dashboard
+# 5. Open dashboard
 # http://localhost:5173
 ```
+
+The backend requires PostgreSQL via `DATABASE_URL`; it does not create or use a SQLite database. For the legacy SQLite import procedure, see [SQLite to PostgreSQL import](docs/SQLITE_TO_POSTGRES_IMPORT.md).
 
 ## NPM Scripts
 
@@ -38,10 +43,13 @@ npm start
 |---|---|
 | `npm run build` | Build all workspaces |
 | `npm test` | Run Vitest tests in shared/ |
+| `npm test --workspace server` | Run PostgreSQL integration tests (set `TEST_DATABASE_URL` to a dedicated `hit_tracker_test` database) |
 | `npm run typecheck` | Typecheck placeholder across all workspaces |
 | `npm start` | Start server + client dev + simulator concurrently |
 | `npm run start:prod` | Start server in production mode |
 | `npm run generate:models` | Generate 3D model assets (placeholder) |
+| `npm run db:migrate --workspace server` | Apply versioned PostgreSQL migrations |
+| `npm run db:import-sqlite --workspace server` | Run the one-time legacy importer; requires development dependencies |
 
 ## Roles
 
@@ -70,7 +78,7 @@ Each soldier's device sends a JSON packet at 1 Hz over WebSocket:
 
 ## Environment Variables
 
-See `.env.example` for all required variables.
+Copy `.env.example` to `server/.env` and set `DATABASE_URL`. `TEST_DATABASE_URL` should point to a separate `hit_tracker_test` database; tests reject other database names.
 
 ## Documentation
 
@@ -83,7 +91,7 @@ See `.env.example` for all required variables.
 
 HIT-Tracker is designed for forward operating environments with no internet access:
 - No CDNs – all assets served locally
-- No cloud services – SQLite for persistence
+- PostgreSQL persistence can run on the local ICP network without an internet connection
 - WebSocket for real-time telemetry
 - JWT for authentication
 
