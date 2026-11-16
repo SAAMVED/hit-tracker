@@ -1,16 +1,20 @@
 import { WebSocketServer, WebSocket } from "ws";
-import { AlertsEngine, FloorEstimator, IngestMessageSchema, validatePacket, hypsometricAltitude } from "@hit-tracker/shared";
+import { FloorEstimator, IngestMessageSchema, validatePacket, hypsometricAltitude } from "@hit-tracker/shared";
 import { verifyToken } from "./auth.js";
+import { alertsEngine } from "./alerts-state.js";
+import { loadActiveAlerts, persistAlerts, resolvePersistedAlerts } from "./alert-store.js";
 
 const dashboardClients = new Set();
 const soldierEstimators = new Map();
-const alertsEngine = new AlertsEngine();
 const latestSoldierStates = new Map();
 const lastValidPackets = new Map();
 const soldierEntryReferencePressures = new Map();
 let latestReferenceStation = { stationId: "ICP-BARO-1", pressureHpa: 1013.25, timestamp: Date.now() };
 let initialReferencePressure = null;
 let packetsProcessedThisSec = 0;
+const pendingAlertWrites = [];
+const pendingAlertResolutions = [];
+let alertFlushPromise = Promise.resolve();
 
 function getOrCreateEstimator(soldierId, initialPressureHpa) {
   let estimator = soldierEstimators.get(soldierId);
@@ -34,6 +38,7 @@ export async function createWebSocketGateway(httpServer, db) {
       };
       initialReferencePressure = latestReferenceStation.pressureHpa;
     }
+    alertsEngine.restoreActiveAlerts(await loadActiveAlerts(db));
   } catch (error) {
     throw new Error(`Unable to restore reference barometer state from PostgreSQL: ${error.message}`, { cause: error });
   }
@@ -82,7 +87,7 @@ export async function createWebSocketGateway(httpServer, db) {
   const throughputTimer = setInterval(() => {
     console.log(`[gateway] Processed ${packetsProcessedThisSec} packets/s | Dashboard clients: ${dashboardClients.size}`);
     packetsProcessedThisSec = 0;
-    for (const alert of alertsEngine.checkStaleSoldiers(Date.now())) broadcastToDashboard({ type: "alert", payload: alert });
+    void handleStaleAlerts(db).catch((error) => console.error("[gateway] Failed to persist stale-soldier alerts:", error));
   }, 1000);
   const pingTimer = setInterval(() => broadcastToDashboard({ type: "ping", payload: { serverTime: Date.now() } }), 30_000);
   console.log("[gateway] WebSocket gateway ready (ingest: /ws/ingest, dashboard: /ws/dashboard)");
@@ -156,7 +161,43 @@ async function handleIngestMessage(data, db) {
     altitude: soldierState.altitude, accelMagnitude: packet.accelMagnitude ?? 1.0,
     batteryPct: packet.batteryPct, lastSeenAt: packet.timestamp, floor: estimate.floor,
   }, packet.timestamp);
-  for (const alert of alerts) broadcastToDashboard({ type: "alert", payload: alert });
+  const resolvedIds = alertsEngine.drainResolvedAlertIds();
+  pendingAlertResolutions.push(...resolvedIds);
+  for (const alert of alerts) {
+    pendingAlertWrites.push({ alert, missionId: mission.id });
+    broadcastToDashboard({ type: "alert", payload: alert });
+  }
+  await flushAlertPersistence(db);
+}
+
+async function handleStaleAlerts(db) {
+  const alerts = alertsEngine.checkStaleSoldiers(Date.now());
+  if (alerts.length) {
+    const { rows: [mission] } = await db.query("SELECT id FROM missions WHERE status='active' ORDER BY started_at DESC LIMIT 1");
+    for (const alert of alerts) {
+      pendingAlertWrites.push({ alert, missionId: mission?.id ?? null });
+      broadcastToDashboard({ type: "alert", payload: alert });
+    }
+  }
+  await flushAlertPersistence(db);
+}
+
+function flushAlertPersistence(db) {
+  const flush = alertFlushPromise.then(() => flushPendingAlertPersistence(db));
+  alertFlushPromise = flush.catch(() => {});
+  return flush;
+}
+
+async function flushPendingAlertPersistence(db) {
+  if (pendingAlertResolutions.length) {
+    await resolvePersistedAlerts(db, pendingAlertResolutions, Date.now());
+    pendingAlertResolutions.length = 0;
+  }
+  while (pendingAlertWrites.length) {
+    const item = pendingAlertWrites[0];
+    await persistAlerts(db, [item.alert], item.missionId);
+    pendingAlertWrites.shift();
+  }
 }
 
 async function storeTelemetry(db, packet) {

@@ -156,6 +156,15 @@ export class AlertsEngine {
   #previousFloors = new Map();
   #knownSoldiers = new Map();
   #soldierHistories = new Map();
+  #resolvedAlertIds = [];
+
+  #removeActiveAlert(key) {
+    const alert = this.#activeAlerts.get(key);
+    if (!alert) return false;
+    this.#activeAlerts.delete(key);
+    this.#resolvedAlertIds.push(alert.id);
+    return true;
+  }
 
   /**
    * Process incoming soldier update.
@@ -191,7 +200,7 @@ export class AlertsEngine {
     // If signal was lost previously, clear the signal_lost alert
     const signalLostKey = `${soldier.soldierId}:signal_lost`;
     if (this.#activeAlerts.has(signalLostKey)) {
-      this.#activeAlerts.delete(signalLostKey);
+      this.#removeActiveAlert(signalLostKey);
     }
 
     // 1. Floor transition check
@@ -214,7 +223,7 @@ export class AlertsEngine {
       }
     } else {
       // Cleared / recharged
-      this.#activeAlerts.delete(batteryKey);
+      this.#removeActiveAlert(batteryKey);
     }
 
     // 3. Man Down check
@@ -240,7 +249,7 @@ export class AlertsEngine {
       manDownCheck.reason === "ACCEL_VARIANCE_TOO_HIGH"
     ) {
       // Resumed motion clears man down
-      this.#activeAlerts.delete(manDownKey);
+      this.#removeActiveAlert(manDownKey);
     }
 
     return newAlerts;
@@ -266,7 +275,7 @@ export class AlertsEngine {
           }
         }
       } else {
-        this.#activeAlerts.delete(key);
+        this.#removeActiveAlert(key);
       }
     }
 
@@ -277,6 +286,26 @@ export class AlertsEngine {
     return Array.from(this.#activeAlerts.values()).sort(
       (a, b) => b.timestamp - a.timestamp
     );
+  }
+
+  restoreActiveAlerts(alerts = []) {
+    for (const alert of alerts) {
+      const soldierId = alert.soldierId;
+      if (!soldierId || !alert.id || alert.resolved) continue;
+      let key;
+      if (alert.type === "signal_lost" || alert.type === "battery_low" || alert.type === "man_down") {
+        key = `${soldierId}:${alert.type}`;
+      } else {
+        key = `${soldierId}:${alert.type}:${alert.timestamp}:${alert.id}`;
+      }
+      this.#activeAlerts.set(key, { ...alert });
+    }
+  }
+
+  drainResolvedAlertIds() {
+    const ids = this.#resolvedAlertIds;
+    this.#resolvedAlertIds = [];
+    return ids;
   }
 
   acknowledgeAlert(id, by = "commander", nowMs = Date.now()) {
@@ -295,6 +324,7 @@ export class AlertsEngine {
     for (const [key, alert] of this.#activeAlerts.entries()) {
       if (alert.id === id) {
         this.#activeAlerts.delete(key);
+        this.#resolvedAlertIds.push(alert.id);
         return true;
       }
     }

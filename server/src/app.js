@@ -4,6 +4,8 @@ import fs from "fs";
 import { fileURLToPath } from "url";
 import { loginHandler, verifyToken } from "./auth.js";
 import { CalibrationSchema, calculateMissionAnalytics } from "@hit-tracker/shared";
+import { alertsEngine } from "./alerts-state.js";
+import { acknowledgePersistedAlert, resolvePersistedAlert } from "./alert-store.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -50,6 +52,26 @@ export function createApp(db) {
   }
 
   // ── Routes ───────────────────────────────────────────────────────────────────
+
+  const alertRoute = (handler) => (req, res) => Promise.resolve(handler(req, res)).catch((error) => {
+    console.error("[api] Alert persistence error:", error.message);
+    res.status(500).json({ error: "Internal server error" });
+  });
+
+  app.post("/api/alerts/:id/acknowledge", authenticate, alertRoute(async (req, res) => {
+    const at = Date.now();
+    const alert = await acknowledgePersistedAlert(db, req.params.id, req.user.role, at);
+    if (!alert) return res.status(404).json({ error: "Alert not found" });
+    alertsEngine.acknowledgeAlert(req.params.id, req.user.role, at);
+    res.json(alert);
+  }));
+
+  app.delete("/api/alerts/:id", authenticate, alertRoute(async (req, res) => {
+    const resolved = await resolvePersistedAlert(db, req.params.id, req.user.role);
+    if (!resolved) return res.status(404).json({ error: "Alert not found" });
+    alertsEngine.clearAlert(req.params.id);
+    res.json({ ok: true, id: req.params.id });
+  }));
 
   app.get("/api/health", (_req, res) => {
     res.json({

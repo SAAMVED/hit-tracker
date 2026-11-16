@@ -10,6 +10,7 @@ import ModelCalibrationModal from "./ModelCalibrationModal.jsx";
 import SecurityLogModal from "./SecurityLogModal.jsx";
 import BarometerCalibrationModal from "./BarometerCalibrationModal.jsx";
 import { playCriticalAlertBeep } from "../utils/audio.js";
+import { apiUrl, dashboardWebSocketUrl } from "../utils/api.js";
 
 export default function Dashboard({ auth, onLogout }) {
   const [mode, setMode] = useState("live"); // "live" | "replay"
@@ -356,16 +357,37 @@ export default function Dashboard({ auth, onLogout }) {
   }, [activeSoldiers]);
 
   // ── Alert Actions ───────────────────────────────────────────────────────────
-  const handleAcknowledgeAlert = (id) => {
+  const handleAcknowledgeAlert = async (id) => {
+    const acknowledgedAt = Date.now();
     setLiveAlerts((prev) =>
       prev.map((a) =>
-        a.id === id ? { ...a, acknowledged: true, acknowledgedBy: auth.role } : a
+        a.id === id ? { ...a, acknowledged: true, acknowledgedBy: auth.role, acknowledgedAt } : a
       )
     );
+    try {
+      const response = await fetch(apiUrl(`/api/alerts/${encodeURIComponent(id)}/acknowledge`), {
+        method: "POST",
+        headers: { Authorization: `Bearer ${auth.token}` },
+      });
+      if (!response.ok) throw new Error("Failed to acknowledge alert");
+      const alert = await response.json();
+      setLiveAlerts((previous) => previous.map((item) => item.id === id ? alert : item));
+    } catch (error) {
+      console.error("[dashboard] Failed to persist alert acknowledgement:", error);
+    }
   };
 
-  const handleClearAlert = (id) => {
+  const handleClearAlert = async (id) => {
     setLiveAlerts((prev) => prev.filter((a) => a.id !== id));
+    try {
+      const response = await fetch(apiUrl(`/api/alerts/${encodeURIComponent(id)}`), {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${auth.token}` },
+      });
+      if (!response.ok) throw new Error("Failed to resolve alert");
+    } catch (error) {
+      console.error("[dashboard] Failed to persist alert resolution:", error);
+    }
   };
 
   return (
