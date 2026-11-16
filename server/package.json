@@ -9,7 +9,9 @@
     "test": "node --test",
     "build": "echo \"build\"",
     "start": "node src/index.js",
-    "typecheck": "echo \"typecheck\""
+    "typecheck": "echo \"typecheck\"",
+    "db:migrate": "node scripts/migrate-postgres.js",
+    "db:import-sqlite": "node scripts/import-sqlite.js"
   },
   "dependencies": {
     "@gltf-transform/core": "^4.5.1",
