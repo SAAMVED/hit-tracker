@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import bcrypt from "bcryptjs";
 import { test } from "node:test";
 import { loginHandler, verifyToken } from "../src/auth.js";
+import { createApp } from "../src/app.js";
+import { createIsolatedTestSchema } from "./helpers/postgres.js";
 
 const commanderHash = bcrypt.hashSync("test-commander-password", 4);
 const viewerHash = bcrypt.hashSync("test-viewer-password", 4);
@@ -56,4 +58,45 @@ test("rejects an invalid login request", async () => {
   assert.equal(response.statusCode, 400);
   assert.equal(response.body.error, "Invalid request");
   assert.equal(calls.length, 0);
+});
+
+test("authenticates stored Commander and Viewer password hashes in PostgreSQL", async (t) => {
+  const isolated = await createIsolatedTestSchema("auth_pg_test", `
+    CREATE TABLE users (
+      id BIGSERIAL PRIMARY KEY, username TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL,
+      role TEXT NOT NULL CHECK(role IN ('commander','viewer')), created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+  t.after(() => isolated.close());
+  const db = isolated.pool;
+  await db.query("INSERT INTO users(username,password_hash,role) VALUES($1,$2,$3),($4,$5,$6)", [
+    "commander", bcrypt.hashSync("commander-secret", 4), "commander",
+    "viewer", bcrypt.hashSync("viewer-secret", 4), "viewer",
+  ]);
+  const app = createApp(db);
+
+  async function login(username, password) {
+    const route = app._router.stack.find((layer) => layer.route?.path === "/api/login");
+    assert.ok(route);
+    const req = { body: { username, password } };
+    return new Promise((resolve, reject) => {
+      const res = {
+        statusCode: 200,
+        status(code) { this.statusCode = code; return this; },
+        json(body) { resolve({ statusCode: this.statusCode, body }); return this; },
+      };
+      Promise.resolve(route.route.stack[0].handle(req, res, reject)).catch(reject);
+    });
+  }
+
+  for (const [username, password, role] of [
+    ["commander", "commander-secret", "commander"],
+    ["viewer", "viewer-secret", "viewer"],
+  ]) {
+    const response = await login(username, password);
+    assert.equal(response.statusCode, 200);
+    assert.equal(verifyToken(response.body.token).role, role);
+  }
+  assert.equal((await login("commander", "wrong-secret")).statusCode, 401);
+  assert.equal((await login("unknown", "wrong-secret")).statusCode, 401);
 });

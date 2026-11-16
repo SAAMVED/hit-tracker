@@ -1,3 +1,4 @@
+import "dotenv/config";
 import pg from "pg";
 
 const { Pool } = pg;
@@ -29,6 +30,7 @@ export async function createIsolatedTestSchema(prefix, setupSql) {
   }
 
   return {
+    schema,
     pool: testPool,
     async close() {
       await testPool.end();
